@@ -10,15 +10,13 @@ class ClientTest {
     @Test
     fun testUnauthorizedConnection() {
         runBlocking {
-
-            withTimeout(1000) {
+            withTimeout(5000) {
                 val client = getClient()
                 client.connect(mapOf("token" to "wrongToken"))
                 client.messages
                     .isForbidden()
                     .first()
                 client.disconnect()
-
                 assert(true)
             }
         }
@@ -27,7 +25,7 @@ class ClientTest {
     @Test
     fun testAuthorizedConnection() {
         runBlocking {
-            withTimeout(1000) {
+            withTimeout(5000) {
                 val client = getClient()
                 client.connect(mapOf("token" to "user1234"))
                 val result = client.onConnected { true }

@@ -1,2 +1,2 @@
-rootProject.name = 'PhoenixClient'
+rootProject.name = "PhoenixClient"
 include("lib")

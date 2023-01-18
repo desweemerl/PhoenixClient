@@ -136,8 +136,8 @@ private class ClientImpl(
 
         channels.values.forEach {
             it.flushPushBuffer()
+            }
         }
-    }
 
     override suspend fun <T> onConnected(block: suspend (Client) -> T): T {
         state.filter { it == ConnectionState.CONNECTED }.first()

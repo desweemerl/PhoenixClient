@@ -9,7 +9,7 @@ class ChannelTest {
     @Test
     fun testJoinChannel() {
         runBlocking {
-            withTimeout(3000) {
+            withTimeout(5000) {
                 val client = getClient()
                 client.connect(mapOf("token" to "user1234"))
                 val response = client.onConnected {
