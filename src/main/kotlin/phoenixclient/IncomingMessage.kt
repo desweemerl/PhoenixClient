@@ -5,18 +5,13 @@ import com.google.gson.JsonDeserializer
 import com.google.gson.JsonElement
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import java.lang.reflect.Type
-
-data class Reply(
-    val response: Map<String, Any?>,
-    val status: String,
-)
 
 data class IncomingMessage(
     val topic: String,
     val event: String,
-    val reply: Reply? = null,
-    // ref and joinRef could be null for internal messages like forbidden
+    val reply: Map<String, Any?>? = null,
     val ref: String? = null,
     val joinRef: String? = null,
 )
@@ -43,22 +38,19 @@ object IncomingMessageDeserializer : JsonDeserializer<IncomingMessage> {
 
         val joinRef =
             if (values[0].isJsonNull) null else values[0].asString ?: throw Exception("join_ref must be a string")
-        val ref = values[1]?.asString ?: throw Exception("ref must be a string")
+        val ref =
+            if (values[1].isJsonNull) null else values[1].asString ?: throw Exception("ref must be a string")
         val topic = values[2]?.asString ?: throw Exception("topic must be a string")
         val event = values[3]?.asString ?: throw Exception("event must be a string")
-        val reply = values[4]?.asJsonObject ?: throw Exception("reply must be an object")
-        val response = reply.get("response").asJsonObject ?: throw Exception("response must be an object")
-        val status = reply.get("status").asString ?: throw Exception("response must be a string")
+        val reply =
+            if (values[4].isJsonNull) null else values[4].asJsonObject ?: throw Exception("reply must be an object")
 
         return IncomingMessage(
             joinRef = joinRef,
             ref = ref,
             topic = topic,
             event = event,
-            reply = Reply(
-                response = context.deserialize(response, Map::class.java),
-                status = status
-            )
+            reply = context.deserialize(reply, Map::class.java),
         )
     }
 }
@@ -68,5 +60,34 @@ fun fromJson(input: String): IncomingMessage = JsonProcessor.fromJson(input, Inc
 val Forbidden = IncomingMessage(topic = "phoenix", event = "forbidden")
 val SocketClose = IncomingMessage(topic = "phoenix", event = "socket_close")
 
+fun IncomingMessage.getResponse(): Map<String, Any?>? {
+    val response = reply?.get("response") ?: return null
+
+    return try {
+        response as Map<String, Any?>
+    } catch (ex: ClassCastException) {
+        null
+    }
+}
+
+fun IncomingMessage.isReplyOK(targetTopic: String? = null): Boolean =
+    event == "phx_reply"
+            && reply?.get("status") == "ok"
+            && (targetTopic == null || topic == targetTopic)
+
+fun IncomingMessage.isReplyError(reason: String? = null): Boolean =
+    event == "phx_reply"
+            && reply?.get("status") == "error"
+            && (reason == null || getResponse()?.get("reason") == reason)
+
 fun Flow<IncomingMessage>.isForbidden() = this.filter { it == Forbidden }
 fun Flow<IncomingMessage>.isSocketClose() = this.filter { it == SocketClose }
+
+suspend fun Flow<IncomingMessage>.filterRef(ref: String): IncomingMessage = this.filter { it.ref == ref }.first()
+
+fun IncomingMessage.toResult(): Result<IncomingMessage> =
+    if (this.isReplyError()) {
+        Result.failure(ResponseException("Phoenix returned an error for message with ref ${this.ref}"))
+    } else {
+        Result.success(this)
+    }

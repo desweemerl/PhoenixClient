@@ -1,6 +1,8 @@
 defmodule PhoenixClientTestWeb.Socket do
   use Phoenix.Socket
 
+  channel "test:*", PhoenixClientTestWeb.Channel
+
   def connect(%{"token" => "user1234"}, socket) do
     {:ok, assign(socket, :user_id, "user1234")}
   end

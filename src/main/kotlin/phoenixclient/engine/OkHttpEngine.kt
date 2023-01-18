@@ -94,7 +94,7 @@ class OkHttpEngine() : WebSocketEngine {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                logger.error("Got a failure on webSocket: ${t.message}")
+                logger.error("Got a failure on webSocket: ${t.stackTraceToString()}")
 
                 val message = when (response?.message?.lowercase()) {
                     "forbidden" -> Forbidden
@@ -102,9 +102,9 @@ class OkHttpEngine() : WebSocketEngine {
                     else -> IncomingMessage(
                         topic = "phoenix",
                         event = "failure",
-                        reply = Reply(
-                            status = "error",
-                            response = mapOf<String, Any?>(
+                        reply = mapOf(
+                            "status" to "error",
+                            "response" to mapOf(
                                 "message" to response?.message,
                                 "exception" to t.message,
                             )
@@ -151,6 +151,6 @@ class OkHttpEngine() : WebSocketEngine {
     }
 
     override fun close() {
-        ws?.cancel()
+        ws?.close(1001, "Closing webSocket")
     }
 }

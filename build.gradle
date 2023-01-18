@@ -3,6 +3,7 @@ plugins {
     id "org.jetbrains.kotlin.plugin.serialization" version "1.6.0"
 
     id "java-library"
+    id "jacoco"
 }
 
 group "com.github.ldesweemer"
@@ -40,4 +41,12 @@ dependencies {
 
 test {
     useJUnitPlatform()
+}
+
+test {
+    finalizedBy jacocoTestReport
+}
+
+jacocoTestReport {
+    dependsOn test
 }

@@ -8,6 +8,10 @@ const val DEFAULT_WS_PATH = "/socket"
 const val DEFAULT_WS_SSL = true
 const val DEFAULT_UNTRUSTED_CERTIFICATE = false
 
+class WebSocketEvent(
+    val state: ConnectionState? = null,
+    val message: IncomingMessage? = null
+)
 
 interface WebSocketEngine {
     suspend fun connect(
