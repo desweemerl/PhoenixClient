@@ -18,6 +18,7 @@ typealias MessageCallback = (message: IncomingMessage) -> Unit
 
 interface Client {
     val state: Flow<ConnectionState>
+    val active: Boolean
 
     fun connect(params: Map<String, String>)
     suspend fun disconnect()
@@ -54,7 +55,9 @@ private class ClientImpl(
     val serializer: (message: OutgoingMessage) -> String = { it.toJson() },
 ) : Client {
     private val logger = KotlinLogging.logger {}
-    private var active = false
+    private var _active = false
+    override val active
+        get() = _active
 
     private var scope = CoroutineScope(Dispatchers.Default)
     private var heatBeatJob: Job? = null
@@ -190,7 +193,7 @@ private class ClientImpl(
             return@getOrPut ChannelImpl(topic, sendToSocket, disposeFromSocket)
         }
 
-        return if (!active) {
+        return if (!_active) {
             Result.failure(BadActionException("Socket is not active"))
         } else if (channel.isJoinedOnce) {
             if (channel.state.value != ChannelState.JOINED) {
@@ -207,9 +210,9 @@ private class ClientImpl(
             logger.debug("Waiting socket to be connected before joining channel with topic '$topic'")
             val joinTimer = timer(timeout) {
                 waitWhile(10L) {
-                    active && state.value != ConnectionState.CONNECTED
+                    _active && state.value != ConnectionState.CONNECTED
                 }
-                active
+                _active
             }
 
             joinTimer.start()
@@ -241,7 +244,7 @@ private class ClientImpl(
                 ssl = ssl,
                 untrustedCertificate = untrustedCertificate,
             ).takeWhile {
-                active && _state.value != ConnectionState.DISCONNECTED
+                _active && _state.value != ConnectionState.DISCONNECTED
             }
                 .collect { event ->
                     event.message?.let { incomingMessage ->
@@ -259,7 +262,7 @@ private class ClientImpl(
 
                         // TODO: Check forbidden on both socket and channel
                         if (incomingMessage == Forbidden) {
-                            active = false
+                            _active = false
                         }
                     }
 
@@ -279,7 +282,7 @@ private class ClientImpl(
         }
 
         heatBeatJob = scope.launch {
-            while (active) {
+            while (_active) {
                 delay(heartbeatInterval)
 
                 if (_state.value == ConnectionState.CONNECTED
@@ -292,16 +295,16 @@ private class ClientImpl(
     }
 
     override fun connect(params: Map<String, String>) {
-        if (active) {
+        if (_active) {
             throw Exception("WebSocket is already active")
         }
 
-        active = true
+        _active = true
 
         // Retry after being disconnected
         scope.launch {
             val retryTimer = Timer(retry) {
-                if (!active) {
+                if (!_active) {
                     throw BadActionException("WebSocket is not active")
                 }
                 // Let the webSocket set the connection up
@@ -313,12 +316,12 @@ private class ClientImpl(
                 }
 
                 waitWhile(1) {
-                    active && state.value != ConnectionState.CONNECTED
+                    _active && state.value != ConnectionState.CONNECTED
                 }
             }
 
             state
-                .takeWhile { active }
+                .takeWhile { _active }
                 .collect {
                     if (it == ConnectionState.CONNECTED) {
                         launchHeartbeat()
@@ -339,7 +342,7 @@ private class ClientImpl(
     }
 
     override suspend fun disconnect() {
-        active = false
+        _active = false
 
         channels.values.forEach { it.leave() }
         channels.clear()

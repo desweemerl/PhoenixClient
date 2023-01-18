@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test
 class ClientTest {
 
     @Test
+    @kotlinx.coroutines.ExperimentalCoroutinesApi
     fun testUnauthorizedConnection() = runTest {
         var forbidden = false
         val client = getClient(messageCallback = {
@@ -27,9 +28,11 @@ class ClientTest {
         client.disconnect()
 
         assert(forbidden)
+        assert(!client.active)
     }
 
     @Test
+    @kotlinx.coroutines.ExperimentalCoroutinesApi
     fun testAuthorizedConnection() = runTest {
         val client = getClient()
         var isConnected = false
