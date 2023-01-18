@@ -48,15 +48,16 @@ class Timer<T>(
     private var tries = 0
     private var job: Job? = null
 
+    private var _active = false
     val active: Boolean
-        get() = job?.isActive == true
+        get() = _active
 
     private var _lastResult: Result<T>? = null
     val lastResult: Result<T>?
         get() = _lastResult
 
     suspend fun start() = coroutineScope {
-        if (job?.isActive == true) {
+        if (active) {
             throw BadActionException("Timer is already active")
         }
 
@@ -65,8 +66,8 @@ class Timer<T>(
         }
     }
 
-    fun reset() {
-        job?.cancel()
+    suspend fun reset() {
+        job?.cancelAndJoin()
         tries = 0
         _lastResult = null
     }
@@ -74,9 +75,9 @@ class Timer<T>(
     private suspend fun launchTimer() = coroutineScope {
         _lastResult = null
 
-        var active = true
+        _active = true
 
-        while (active) {
+        while (_active) {
             val timeout = calcTimeout(tries++) ?: break
 
             val job = launch {
@@ -85,7 +86,7 @@ class Timer<T>(
                 } catch (ex: CancellationException) {
                     Result.failure(TimeoutException("Timer timed out after $timeout ms"))
                 } catch (ex: Exception) {
-                    active = false
+                    _active = false
                     Result.failure(ex)
                 }
             }
@@ -95,7 +96,7 @@ class Timer<T>(
             }
 
             if (job.isActive) job.cancelAndJoin()
-            if (lastResult?.isSuccess == true) active = false
+            if (lastResult?.isSuccess == true) _active = false
         }
     }
 }

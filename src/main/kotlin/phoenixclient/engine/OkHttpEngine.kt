@@ -61,6 +61,7 @@ class OkHttpEngine() : WebSocketEngine {
         ssl: Boolean,
         untrustedCertificate: Boolean,
     ): Flow<WebSocketEvent> = callbackFlow {
+        var closed = false
         val client = if (ssl && untrustedCertificate)
             getUntrustedOkHttpClient() else getHttpClient()
 
@@ -73,54 +74,62 @@ class OkHttpEngine() : WebSocketEngine {
 
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                trySendBlocking(WebSocketEvent(state = ConnectionState.CONNECTED))
-                    .onFailure {
-                        logger.error("Failed to send state CONNECTED")
-                    }
+                if (!closed) {
+                    trySendBlocking(WebSocketEvent(state = ConnectionState.CONNECTED))
+                        .onFailure {
+                            logger.error("Failed to send state CONNECTED")
+                        }
+                }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                trySendBlocking(WebSocketEvent(state = ConnectionState.DISCONNECTED))
-                    .onFailure {
-                        logger.error("Failed to send state DISCONNECTED")
-                    }
+                if (!closed) {
+                    trySendBlocking(WebSocketEvent(state = ConnectionState.DISCONNECTED))
+                        .onFailure {
+                            logger.error("Failed to send state DISCONNECTED")
+                        }
+                }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                trySendBlocking(WebSocketEvent(state = ConnectionState.DISCONNECTED))
-                    .onFailure {
-                        logger.error("Failed to send state DISCONNECTED")
-                    }
+                if (!closed) {
+                    trySendBlocking(WebSocketEvent(state = ConnectionState.DISCONNECTED))
+                        .onFailure {
+                            logger.error("Failed to send state DISCONNECTED")
+                        }
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 logger.error("Got a failure on webSocket: " + t.stackTraceToString())
 
-                val message = when (response?.message?.lowercase()) {
-                    "forbidden" -> Forbidden
-                    "socket close" -> SocketClose
-                    else -> IncomingMessage(
-                        topic = "phoenix",
-                        event = "failure",
-                        reply = mapOf(
-                            "status" to "error",
-                            "response" to mapOf(
-                                "message" to response?.message,
-                                "exception" to t.message,
+                if (!closed) {
+                    val message = when (response?.message?.lowercase()) {
+                        "forbidden" -> Forbidden
+                        "socket close" -> SocketClose
+                        else -> IncomingMessage(
+                            topic = "phoenix",
+                            event = "failure",
+                            reply = mapOf(
+                                "status" to "error",
+                                "response" to mapOf(
+                                    "message" to response?.message,
+                                    "exception" to t.message,
+                                )
                             )
                         )
-                    )
-                }
-
-                trySendBlocking(
-                    WebSocketEvent(
-                        state = ConnectionState.DISCONNECTED,
-                        message = message,
-                    )
-                )
-                    .onFailure {
-                        logger.error("Failed to send failure event: $message")
                     }
+
+                    trySendBlocking(
+                        WebSocketEvent(
+                            state = ConnectionState.DISCONNECTED,
+                            message = message,
+                        )
+                    )
+                        .onFailure {
+                            logger.error("Failed to send failure event: $message")
+                        }
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -142,6 +151,7 @@ class OkHttpEngine() : WebSocketEngine {
             ws?.let {
                 logger.info("Unregistering webSocket callbacks")
                 it.close(1001, "Closing request")
+                closed = true
             }
         }
     }

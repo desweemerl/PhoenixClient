@@ -51,7 +51,7 @@ private class ClientImpl(
     private val defaultTimeout: Long = DEFAULT_TIMEOUT,
     private val webSocketEngine: WebSocketEngine = OkHttpEngine(),
     private val messageCallback: MessageCallback = {},
-    val serializer: (message: OutgoingMessage) -> String = {it.toJson()},
+    val serializer: (message: OutgoingMessage) -> String = { it.toJson() },
 ) : Client {
     private val logger = KotlinLogging.logger {}
     private var active = false
@@ -87,7 +87,7 @@ private class ClientImpl(
         timeout: DynamicTimeout,
         joinRef: String? = null,
         noReply: Boolean = false,
-    ) : Result<IncomingMessage?> {
+    ): Result<IncomingMessage?> {
         val channel = channels[topic]
 
         channel?.let {
@@ -165,7 +165,7 @@ private class ClientImpl(
 
     private fun rejoinChannels() {
         scope.launch {
-            channels.values.filter { it.isJoinedOnce }.forEach{ it.rejoin() }
+            channels.values.filter { it.isJoinedOnce }.forEach { it.rejoin() }
         }
     }
 
@@ -174,10 +174,8 @@ private class ClientImpl(
 
     override suspend fun join(topic: String, payload: Map<String, Any?>, timeout: DynamicTimeout): Result<Channel> {
         val channel = channels.getOrPut(topic) {
-            var channelImpl: ChannelImpl?
-
             val sendToSocket: suspend (String, Map<String, Any?>, DynamicTimeout, String?, Boolean)
-                -> Result<IncomingMessage?> =
+            -> Result<IncomingMessage?> =
                 { event, payload, channelTimeout, joinRef, noReply ->
                     send(topic, event, payload, channelTimeout, joinRef, noReply)
                 }
@@ -189,9 +187,7 @@ private class ClientImpl(
                 }
             }
 
-            channelImpl = ChannelImpl(topic, sendToSocket, disposeFromSocket)
-
-            return@getOrPut channelImpl
+            return@getOrPut ChannelImpl(topic, sendToSocket, disposeFromSocket)
         }
 
         return if (!active) {
@@ -255,7 +251,7 @@ private class ClientImpl(
                             messageCallback(incomingMessage)
                         }
 
-                        event.message?.let { message ->
+                        event.message.let { message ->
                             if (message.ref != null) {
                                 messageBuffer[message.ref] = message
                             }
@@ -310,7 +306,7 @@ private class ClientImpl(
                 }
                 // Let the webSocket set the connection up
                 if (state.value == ConnectionState.DISCONNECTED) {
-                    connectJob?.cancel()
+                    connectJob?.cancelAndJoin()
                     connectJob = scope.launch {
                         launchWebSocket(params)
                     }
@@ -324,20 +320,17 @@ private class ClientImpl(
             state
                 .takeWhile { active }
                 .collect {
-                    when (it) {
-                        ConnectionState.CONNECTED -> {
-                            launchHeartbeat()
-                            rejoinChannels()
-                        }
-                        ConnectionState.DISCONNECTED -> {
-                            heatBeatJob?.cancel()
-                            dirtyCloseChannels()
+                    if (it == ConnectionState.CONNECTED) {
+                        launchHeartbeat()
+                        rejoinChannels()
+                    } else if (it == ConnectionState.DISCONNECTED) {
+                        heatBeatJob?.cancelAndJoin()
+                        dirtyCloseChannels()
 
-                            if (!retryTimer.active) {
-                                scope.launch {
-                                    retryTimer.reset()
-                                    retryTimer.start()
-                                }
+                        if (!retryTimer.active) {
+                            scope.launch {
+                                retryTimer.reset()
+                                retryTimer.start()
                             }
                         }
                     }
@@ -369,7 +362,7 @@ fun okHttpPhoenixClient(
     heartbeatTimeout: Long = DEFAULT_HEARTBEAT_TIMEOUT,
     defaultTimeout: Long = DEFAULT_TIMEOUT,
     messageCallback: MessageCallback = {},
-) : Result<Client> =
+): Result<Client> =
     try {
         Result.success(
             ClientImpl(
