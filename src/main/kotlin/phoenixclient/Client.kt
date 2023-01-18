@@ -19,6 +19,7 @@ typealias MessageCallback = (message: IncomingMessage) -> Unit
 interface Client {
     val state: Flow<ConnectionState>
     val active: Boolean
+    val messages: Flow<IncomingMessage>
 
     fun connect(params: Map<String, String>)
     suspend fun disconnect()
@@ -51,7 +52,6 @@ private class ClientImpl(
     val heartbeatTimeout: Long = DEFAULT_HEARTBEAT_TIMEOUT,
     private val defaultTimeout: Long = DEFAULT_TIMEOUT,
     private val webSocketEngine: WebSocketEngine = OkHttpEngine(),
-    private val messageCallback: MessageCallback = {},
     val serializer: (message: OutgoingMessage) -> String = { it.toJson() },
 ) : Client {
     private val logger = KotlinLogging.logger {}
@@ -74,6 +74,10 @@ private class ClientImpl(
 
     // Store incoming messages by ref
     private val messageBuffer = mutableMapOf<String, IncomingMessage>()
+
+    // Incoming messages
+    private val _messages = MutableSharedFlow<IncomingMessage>(extraBufferCapacity = 100)
+    override val messages = _messages.asSharedFlow()
 
     init {
         if (heartbeatInterval < defaultTimeout) {
@@ -190,7 +194,11 @@ private class ClientImpl(
                 }
             }
 
-            return@getOrPut ChannelImpl(topic, sendToSocket, disposeFromSocket)
+            val topicMessages = messages.filter {
+                it.topic == topic
+            }
+
+            return@getOrPut ChannelImpl(topic, topicMessages, sendToSocket, disposeFromSocket)
         }
 
         return if (!_active) {
@@ -251,7 +259,10 @@ private class ClientImpl(
                         logger.debug("Receiving message from engine: $incomingMessage")
 
                         launch {
-                            messageCallback(incomingMessage)
+                            val emitted = _messages.tryEmit(incomingMessage)
+                            if (!emitted) {
+                                logger.warn("Failed to emit message: $incomingMessage")
+                            }
                         }
 
                         event.message.let { message ->
@@ -364,7 +375,6 @@ fun okHttpPhoenixClient(
     heartbeatInterval: Long = DEFAULT_HEARTBEAT_INTERVAL,
     heartbeatTimeout: Long = DEFAULT_HEARTBEAT_TIMEOUT,
     defaultTimeout: Long = DEFAULT_TIMEOUT,
-    messageCallback: MessageCallback = {},
 ): Result<Client> =
     try {
         Result.success(
@@ -379,7 +389,6 @@ fun okHttpPhoenixClient(
                 heartbeatTimeout,
                 defaultTimeout,
                 OkHttpEngine(),
-                messageCallback,
             )
         )
     } catch (ex: Exception) {

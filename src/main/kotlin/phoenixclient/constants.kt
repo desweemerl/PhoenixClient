@@ -8,7 +8,7 @@ const val DEFAULT_HEARTBEAT_TIMEOUT = 1000L // 1 sec
 const val DEFAULT_TIMEOUT = 10000L // 10 secs
 
 val DEFAULT_RETRY: DynamicTimeout = {
-    listOf(10L, 50L, 100L, 150L, 200L, 250L, 500L, 1000L, 2000L).getOrNull(it) ?: 5000
+    listOf(10L, 50L, 100L, 150L, 200L, 250L, 500L, 1000L, 2000L).getOrNull(it) ?: 5000L
 }
 
 val DEFAULT_REJOIN_TIMEOUT: DynamicTimeout = {

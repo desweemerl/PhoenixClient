@@ -14,7 +14,8 @@ enum class ChannelState {
 interface Channel {
     val topic: String
 
-    val state: StateFlow<ChannelState>
+    val state: Flow<ChannelState>
+    val messages: Flow<IncomingMessage>
 
     suspend fun pushNoReply(event: String, payload: Map<String, Any?> = mapOf()): Result<Unit>
     suspend fun pushNoReply(event: String, payload: Map<String, Any?>, timeout: Long): Result<Unit>
@@ -27,6 +28,7 @@ interface Channel {
 
 internal class ChannelImpl(
     override val topic: String,
+    override val messages: Flow<IncomingMessage>,
 
     private val sendToSocket: suspend (
         event: String,
@@ -56,7 +58,7 @@ internal class ChannelImpl(
         pushNoReply(event, payload, defaultTimeout)
 
     override suspend fun pushNoReply(event: String, payload: Map<String, Any?>, timeout: Long): Result<Unit> =
-        sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef, true).map { Unit }
+        sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef, true).map { }
 
     override suspend fun push(event: String, payload: Map<String, Any?>) =
         push(event, payload, defaultTimeout)
