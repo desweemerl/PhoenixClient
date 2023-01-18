@@ -101,7 +101,27 @@ private class ClientImpl(
             }
         }
 
-        val sendMessage = suspend {
+
+        val sendTimer = timer(timeout) {
+            if (channel != null && channel.state.value != ChannelState.JOINED) {
+                if (event == "phx_join") {
+                    if (state.value != ConnectionState.CONNECTED) {
+                        throw BadActionException(
+                            "Failed to join channel with topic '${channel.topic}' because WebSocket is not connected"
+                        )
+                    }
+                } else {
+                    logger.debug(
+                        "Waiting for channel with topic '${channel.topic}' to join before sending "
+                                + "message with event='$event' and payload='$payload'"
+                    )
+
+                    waitUntil(1) {
+                        channel.state.value == ChannelState.JOINED
+                    }
+                }
+            }
+
             val ref = messageRef().toString()
             val outgoingMessage = OutgoingMessage(topic, event, payload, ref, joinRef)
             webSocketEngine.send(serializer(outgoingMessage))
@@ -112,31 +132,14 @@ private class ClientImpl(
                 waitUntil(1) {
                     messageBuffer.containsKey(ref)
                 }
-                messageBuffer.remove(ref)
-            }
-        }
+                val message = messageBuffer.remove(ref)
 
-        val sendTimer = timer(timeout) {
-            if (channel != null && event != "phx_join" && channel.state.value != ChannelState.JOINED) {
-                logger.debug(
-                    "Waiting for channel with topic '${channel.topic}' to join before sending "
-                            + "message with event='$event' and payload='$payload'"
-                )
-
-                waitUntil(1) {
-                    channel.state.value == ChannelState.JOINED
-                }
-            }
-
-            if (noReply) {
-                sendMessage()
-            } else {
-                var message = sendMessage()
-                if (channel != null && message?.isUnmatchedTopic() == true) {
-                    waitUntil(1) {
-                        channel.state.value == ChannelState.JOINED
-                    }
-                    message = sendMessage()
+                if (message?.isError() == true || message?.isReplyError() == true) {
+                    rejoinChannel(topic)
+                    throw ResponseException(
+                        "Phoenix returned an error for message with ref '${ref}",
+                        message
+                    )
                 }
                 message
             }
@@ -147,11 +150,20 @@ private class ClientImpl(
         return sendTimer.lastResult!!
     }
 
-    fun dirtyCloseChannels() {
+    private fun dirtyCloseChannels() {
         channels.values.forEach { it.dirtyClose() }
     }
 
-    fun rejoinChannels() {
+    private suspend fun rejoinChannel(topic: String) = coroutineScope {
+        channels[topic]?.let {
+            launch {
+                it.dirtyClose()
+                it.rejoin()
+            }
+        }
+    }
+
+    private fun rejoinChannels() {
         scope.launch {
             channels.values.filter { it.isJoinedOnce }.forEach{ it.rejoin() }
         }
@@ -162,7 +174,7 @@ private class ClientImpl(
 
     override suspend fun join(topic: String, payload: Map<String, Any?>, timeout: DynamicTimeout): Result<Channel> {
         val channel = channels.getOrPut(topic) {
-            var channelImpl: ChannelImpl? = null
+            var channelImpl: ChannelImpl?
 
             val sendToSocket: suspend (String, Map<String, Any?>, DynamicTimeout, String?, Boolean)
                 -> Result<IncomingMessage?> =
@@ -216,7 +228,7 @@ private class ClientImpl(
         }
     }
 
-    suspend fun launchWebSocket(params: Map<String, String>) = coroutineScope {
+    private suspend fun launchWebSocket(params: Map<String, String>) = coroutineScope {
         if (_state.value != ConnectionState.DISCONNECTED) {
             return@coroutineScope
         }
@@ -252,14 +264,6 @@ private class ClientImpl(
                         // TODO: Check forbidden on both socket and channel
                         if (incomingMessage == Forbidden) {
                             active = false
-                        } else if (incomingMessage.isError() && incomingMessage.topic.isNotEmpty()) {
-                            channels[incomingMessage.topic]?.let {
-                                launch {
-                                    it.dirtyClose()
-                                    it.rejoin()
-                                }
-                            }
-
                         }
                     }
 

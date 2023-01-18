@@ -66,27 +66,27 @@ class ChannelTest {
     @RepeatedTest(10)
     fun testChannelCrash() = runBlocking {
         val client = getClient()
-        var message: IncomingMessage? = null
+        var exception: Throwable? = null
 
         val job = launch {
             client.state.isConnected()
                 .collect {
                     var channel = client.join("test:1").getOrThrow()
                     channel.pushNoReply("crash_channel")
-                    message = channel.push("hello", mapOf("name" to "toto")).getOrThrow()
+                    exception = channel.push("hello", mapOf("name" to "toto"), 1000L).exceptionOrNull()
                 }
         }
 
         client.connect(mapOf("token" to "user1234"))
 
         waitWhile(1, 5000) {
-            message == null || message?.isUnmatchedTopic() == true
+            exception == null
         }
 
         job.cancel()
         client.disconnect()
 
-        assert(message?.getResponse()?.get("message") == "hello toto")
+        assert(exception is TimeoutException || exception is ResponseException)
     }
 
 
