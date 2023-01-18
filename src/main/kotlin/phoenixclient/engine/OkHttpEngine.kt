@@ -126,7 +126,7 @@ class OkHttpEngine() : WebSocketEngine {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 trySendBlocking(WebSocketEvent(message = fromJson(text)))
                     .onFailure {
-                        logger.error("Failed to send message: $text")
+                        logger.error("Failed to receive message: ${it?.stackTraceToString()}")
                     }
             }
         }

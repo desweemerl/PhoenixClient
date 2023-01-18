@@ -17,13 +17,16 @@ repositories {
 dependencies {
     // Multi-platform logger + slf4j
     implementation "io.github.microutils:kotlin-logging-jvm:2.1.0"
-    testImplementation group: "org.slf4j", name: "slf4j-simple", version: "1.6.1"
+    implementation group: "commons-collections", name: "commons-collections", version: "3.2"
+    implementation group: "org.slf4j", name: "slf4j-api", version: "1.7.2"
+    implementation group: "org.slf4j", name: "slf4j-simple", version: "1.7.2"
 
     // Json serialization/deserialization
     implementation "com.google.code.gson:gson:2.8.9"
-    
+
     // Companion library for Kotlin
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.5.2-native-mt"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.0-RC3"
+    testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.6.0-RC3"
 
     def okhttp_version = "4.9.3"
     implementation "com.squareup.okhttp3:okhttp:$okhttp_version"

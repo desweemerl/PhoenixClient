@@ -6,30 +6,23 @@ import mu.KotlinLogging
 import phoenixclient.engine.OkHttpEngine
 
 
-const val VSN = "2.0.0"
-
-const val DEFAULT_HEARTBEAT_INTERVAL = 30000L // 30 secs
-const val DEFAULT_TIMEOUT = 1000L // 1 sec
-const val DEFAULT_RETRY = 5000L // 5 secs
-
-
 enum class ConnectionState {
     CONNECTED,
     CONNECTING,
     DISCONNECTED,
 }
 
-fun Flow<ConnectionState>.isConnected() = this.filter { it == ConnectionState.CONNECTED }
+fun Flow<ConnectionState>.isConnected() = this.filter { it == ConnectionState.CONNECTED }.map { true }
 
 interface Client {
     val state: StateFlow<ConnectionState>
     val messages: SharedFlow<IncomingMessage>
 
     fun connect(params: Map<String, String>)
-    fun disconnect()
+    suspend fun disconnect()
 
     suspend fun join(topic: String, payload: Map<String, Any?> = mapOf()): Result<Channel>
-    suspend fun join(topic: String, payload: Map<String, Any?>, timeout: Long): Result<Channel>
+    suspend fun join(topic: String, payload: Map<String, Any?>, timeout: DynamicTimeout): Result<Channel>
 }
 
 fun refGenerator(): () -> Long {
@@ -51,21 +44,23 @@ private class ClientImpl(
     val path: String = DEFAULT_WS_PATH,
     val ssl: Boolean = DEFAULT_WS_SSL,
     val untrustedCertificate: Boolean = DEFAULT_UNTRUSTED_CERTIFICATE,
-    val retry: Long = DEFAULT_RETRY,
+    val retry: DynamicTimeout = DEFAULT_RETRY,
     val heartbeatInterval: Long = DEFAULT_HEARTBEAT_INTERVAL,
+    val heartbeatTimeout: Long = DEFAULT_HEARTBEAT_TIMEOUT,
     private val defaultTimeout: Long = DEFAULT_TIMEOUT,
     private val webSocketEngine: WebSocketEngine = OkHttpEngine(),
     val serializer: (message: OutgoingMessage) -> String = {it.toJson()},
 ) : Client {
     private val logger = KotlinLogging.logger {}
-    private var activated = false
+    private var active = false
 
     private var scope = CoroutineScope(Dispatchers.Default)
     private var heatBeatJob: Job? = null
+    private var connectJob: Job? = null
 
     // Incoming and outgoing messages
     private val incomingFlow = MutableSharedFlow<IncomingMessage>()
-    private val outgoingFlow = MutableSharedFlow<OutgoingMessage>()
+    private val incomingBuffer = mutableMapOf<String, IncomingMessage>()
 
     // Manage message ref
     private val messageRef = refGenerator()
@@ -89,53 +84,68 @@ private class ClientImpl(
         topic: String,
         event: String,
         payload: Map<String, Any?>,
-        timeout: Long? = null,
+        timeout: DynamicTimeout,
         joinRef: String? = null,
+        noReply: Boolean = false
     ) : Result<IncomingMessage?> {
-        val ref = messageRef().toString()
+        val channel = channels[topic]
 
-        val message = OutgoingMessage(topic, event, payload, ref, joinRef)
-        webSocketEngine.send(serializer(message))
-
-        if (timeout == null) {
-            return Result.success(null)
-        }
-
-        return try {
-            if (timeout > 0) {
-                withTimeout(timeout) {
-                    incomingFlow.filterRef(ref).toResult()
-                }
-            } else {
-                incomingFlow.filterRef(ref).toResult()
+        channel?.let {
+            if (!it.isJoinedOnce && event != "phx_join") {
+                return Result.failure(
+                    BadActionException(
+                        "Channel with topic '$topic' was never joined. " +
+                                "Join the channel before pushing message"
+                    )
+                )
             }
-        } catch (ex: TimeoutCancellationException) {
-            Result.failure(
-                TimeoutException("Response for message with ref '$ref' didn't come after $timeout ms")
-            )
-        } catch (ex: Exception) {
-            Result.failure(ex)
         }
+
+        val sendTimer = timer(timeout) {
+            if (channel != null && event != "phx_join" && channel.state.value != ChannelState.JOINED) {
+                logger.debug(
+                    "Waiting for channel with topic '${channel.topic}' to join before sending "
+                            + "message with event='$event' and payload='$payload'"
+                )
+                waitUntil(1) {
+                    channel.state.value == ChannelState.JOINED
+                }
+            }
+
+            val ref = messageRef().toString()
+            val message = OutgoingMessage(topic, event, payload, ref, joinRef)
+            webSocketEngine.send(serializer(message))
+
+            if (noReply) {
+                null
+            } else {
+                waitUntil(1) {
+                    incomingBuffer.containsKey(ref)
+                }
+
+                incomingBuffer.remove(ref)
+            }
+        }
+
+        sendTimer.start()
+
+        return sendTimer.lastResult!!
     }
 
     fun dirtyCloseChannels() {
         channels.values.forEach { it.dirtyClose() }
     }
 
-    suspend fun flushChannels() {
-        if (_state.value != ConnectionState.CONNECTED) {
-            return
-        }
-
-        channels.values.forEach {
-            it.flushPushBuffer()
+    fun rejoinChannels() {
+        scope.launch {
+            channels.values.filter { it.isJoinedOnce }.forEach{ it.rejoin() }
         }
     }
 
     override suspend fun join(topic: String, payload: Map<String, Any?>): Result<Channel> =
-        join(topic, payload, defaultTimeout)
+        join(topic, payload, defaultTimeout.toDynamicTimeout(true))
 
-    override suspend fun join(topic: String, payload: Map<String, Any?>, timeout: Long): Result<Channel> {
+    override suspend fun join(topic: String, payload: Map<String, Any?>, timeout: DynamicTimeout): Result<Channel> {
         val channel = channels.getOrPut(topic) {
             var channelImpl: ChannelImpl? = null
 
@@ -149,17 +159,12 @@ private class ClientImpl(
                         logger.info("Trying to reconnect to channel with topic '$topic'")
                         channelImpl?.let { ci ->
                             ci.dirtyClose()
-                            ci.rejoin(timeout).onFailure {
-                                logger.error(
-                                    "Failed to rejoin channel with topic '$topic': " +
-                                        it.stackTraceToString()
-                                )
-                            }
+                            ci.rejoin()
                         }
                     }
             }
 
-            val sendToSocket: suspend (String, Map<String, Any?>, Long?, String?) -> Result<IncomingMessage?> =
+            val sendToSocket: suspend (String, Map<String, Any?>, DynamicTimeout, String?) -> Result<IncomingMessage?> =
                 { event, payload, channelTimeout, joinRef ->
                     send(topic, event, payload, channelTimeout, joinRef)
                 }
@@ -177,23 +182,36 @@ private class ClientImpl(
             return@getOrPut channelImpl
         }
 
-        return if (
+        return if (!active) {
+            Result.failure(BadActionException("Socket is not active"))
+        } else if (channel.isJoinedOnce) {
+            if (channel.state.value != ChannelState.JOINED) {
+                logger.debug("Socket is connected and channel with topic '$topic' will be joined automatically")
+            }
+            Result.success(channel)
+        } else if (
             state.value == ConnectionState.CONNECTED
             && channel.state.value == ChannelState.CLOSE
         ) {
             logger.debug("Joining channel with topic '$topic'")
-            channel.join(payload, timeout)
+            channel.join(payload)
         } else {
-            try {
-                withTimeout(timeout) {
-                    logger.info("Waiting for channel with topic '$topic' to be connected")
-                    state.filter { it == ConnectionState.CONNECTED }.first()
-                    channel.join(payload, 0)
+            logger.debug("Waiting socket to be connected before joining channel with topic '$topic'")
+            val joinTimer = timer(timeout) {
+                waitWhile(10L) {
+                    active && state.value != ConnectionState.CONNECTED
                 }
-            } catch (ex: TimeoutCancellationException) {
-                Result.failure(
-                    TimeoutException("Failed to join channel with topic '$topic' after $timeout ms")
-                )
+                active
+            }
+
+            joinTimer.start()
+
+            val result = joinTimer.lastResult!!
+
+            if (result.isFailure) {
+                Result.failure(BadActionException("Socket is not active"))
+            } else {
+                channel.join(payload)
             }
         }
     }
@@ -206,40 +224,41 @@ private class ClientImpl(
         logger.info("Launching webSocket")
         _state.update { ConnectionState.CONNECTING }
 
-        webSocketEngine.connect(
-            host = host,
-            port = port,
-            path = path,
-            params = params,
-            ssl = ssl,
-            untrustedCertificate = untrustedCertificate,
-        )
-            .takeWhile {
-                activated &&  _state.value != ConnectionState.DISCONNECTED
-            }
-            .collect { incomingMessage ->
-                incomingMessage.message?.let {
-                    logger.debug("Receiving message from engine: ${incomingMessage.message}")
-                    incomingFlow.emit(it)
-
-                    if (it == Forbidden) {
-                        activated = false
-                    }
+        try {
+            webSocketEngine.connect(
+                host = host,
+                port = port,
+                path = path,
+                params = params,
+                ssl = ssl,
+                untrustedCertificate = untrustedCertificate,
+            )
+                .takeWhile {
+                    active && _state.value != ConnectionState.DISCONNECTED
                 }
+                .collect { incomingMessage ->
+                    incomingMessage.message?.let {
+                        logger.debug("Receiving message from engine: ${incomingMessage.message}")
+                        incomingMessage.message.ref?.let { ref ->
+                            incomingBuffer[ref] = incomingMessage.message
+                        }
 
-                incomingMessage.state?.let { newState ->
-                    logger.debug("Receiving new state '$newState' from webSocket engine")
+                        incomingFlow.emit(it)
 
-                    if (newState == ConnectionState.CONNECTED) {
-                        launchHeartbeat()
-                    } else if (newState == ConnectionState.DISCONNECTED) {
-                        heatBeatJob?.cancel()
-                        dirtyCloseChannels()
+                        // TODO: Check forbidden on both socket and channel
+                        if (it == Forbidden) {
+                            active = false
+                        }
                     }
 
-                    _state.update { newState }
+                    incomingMessage.state?.let { newState ->
+                        logger.debug("Receiving new state '$newState' from webSocket engine")
+                        _state.update { newState }
+                    }
                 }
-            }
+        } finally {
+            _state.update { ConnectionState.DISCONNECTED }
+        }
     }
 
     private fun launchHeartbeat() {
@@ -248,10 +267,11 @@ private class ClientImpl(
         }
 
         heatBeatJob = scope.launch {
-            while (activated) {
+            while (active) {
                 delay(heartbeatInterval)
+
                 if (_state.value == ConnectionState.CONNECTED
-                    && send("phoenix", "heartbeat", mapOf(), defaultTimeout).getOrNull() == null
+                    && send("phoenix", "heartbeat", mapOf(), heartbeatTimeout.toDynamicTimeout()).isFailure
                 ) {
                     webSocketEngine.close()
                 }
@@ -260,27 +280,62 @@ private class ClientImpl(
     }
 
     override fun connect(params: Map<String, String>) {
-        if (activated) {
-            throw Exception("WebSocket is already activated")
+        if (active) {
+            throw Exception("WebSocket is already active")
         }
 
-        activated = true
-
-        scope.launch { launchWebSocket(params) }
+        active = true
 
         // Retry after being disconnected
         scope.launch {
+            val retryTimer = Timer(retry) {
+                // Let the webSocket set the connection up
+                if (connectJob?.isActive != true || state.value != ConnectionState.CONNECTING) {
+                    connectJob?.cancel()
+                    connectJob = scope.launch {
+                        launchWebSocket(params)
+                    }
+                }
+
+                waitWhile(1) {
+                    active && state.value != ConnectionState.CONNECTED
+                }
+            }
+
             state
-                .takeWhile { activated }
-                .filter { it == ConnectionState.DISCONNECTED }
-                .debounce(retry)
-                .collect { scope.launch { launchWebSocket(params) } }
+                .takeWhile { active }
+                .collect {
+                    when (it) {
+                        ConnectionState.CONNECTED -> {
+                            launchHeartbeat()
+                            rejoinChannels()
+                        }
+                        ConnectionState.DISCONNECTED -> {
+                            heatBeatJob?.cancel()
+                            dirtyCloseChannels()
+
+                            if (!retryTimer.active) {
+                                scope.launch {
+                                    retryTimer.reset()
+                                    retryTimer.start()
+                                }
+                            }
+                        }
+                    }
+                }
         }
     }
 
-    override fun disconnect() {
-        activated = false
+    override suspend fun disconnect() {
+        active = false
+
+        channels.values.forEach { it.leave() }
+        channels.clear()
+
         webSocketEngine.close()
+
+        incomingBuffer.clear()
+        scope.cancel()
     }
 }
 
@@ -290,14 +345,15 @@ fun okHttpPhoenixClient(
     path: String = DEFAULT_WS_PATH,
     ssl: Boolean = DEFAULT_WS_SSL,
     untrustedCertificate: Boolean = DEFAULT_UNTRUSTED_CERTIFICATE,
-    retry: Long = DEFAULT_RETRY,
+    retry: DynamicTimeout = DEFAULT_RETRY,
     heartbeatInterval: Long = DEFAULT_HEARTBEAT_INTERVAL,
+    heartbeatTimeout: Long = DEFAULT_HEARTBEAT_TIMEOUT,
     defaultTimeout: Long = DEFAULT_TIMEOUT,
 ) : Result<Client> =
     try {
         Result.success(
             ClientImpl(
-                host, port, path, ssl, untrustedCertificate, retry, heartbeatInterval, defaultTimeout, OkHttpEngine()
+                host, port, path, ssl, untrustedCertificate, retry, heartbeatInterval, heartbeatTimeout, defaultTimeout, OkHttpEngine()
             )
         )
     } catch (ex: Exception) {
