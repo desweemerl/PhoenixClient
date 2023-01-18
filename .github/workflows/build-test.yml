@@ -1,0 +1,39 @@
+name: PhoenixClient CI
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v2
+        with:
+          java-version: "11"
+          distribution: "adopt"
+
+      - name: Change wrapper permissions
+        run: chmod +x ./gradlew
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "23.0"
+          elixir-version: "1.12.3"
+
+      - name: Build and run end-to-end tests
+        working-directory: test
+        run: |
+          mix deps.get
+          mix phx.server &
+          cd ../;./gradlew build
+
+      - name: Archive the package
+        uses: actions/upload-artifact@v2
+        with:
+          name: Package
+          path: build/libs
