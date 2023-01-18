@@ -47,3 +47,5 @@ data class ReplyReason(
 fun Reply.isError(reason: String? = null): Boolean =
     status == Status.ERROR
             && (reason == null || convertTo(ReplyReason::class).getOrNull()?.reason == reason)
+
+fun Reply.isTopicClosed(): Boolean = isError("unmatched topic")

@@ -82,27 +82,27 @@ class ChannelTest {
     @RepeatedTest(10)
     fun testChannelCrash() = runBlocking {
         val client = getClient()
-        var exception: Throwable? = null
+        var result: Result<Reply>? = null
 
         val job = launch {
             client.state.isConnected()
                 .collect {
                     val channel = client.join("test:1").getOrThrow()
                     channel.pushNoReply("crash_channel")
-                    exception = channel.push("hello", TestPayload(name = "toto"), 1000L).exceptionOrNull()
+                    result = channel.push("hello", TestPayload(name = "toto"), 1000L)
                 }
         }
 
         client.connect(mapOf("token" to "user1234"))
 
         waitWhile(1, 5000) {
-            exception == null
+            result == null
         }
 
         job.cancel()
         client.disconnect()
 
-        assert(exception is TimeoutException || exception is ResponseException)
+        assert(result?.isSuccess == true)
     }
 
     @RepeatedTest(10)

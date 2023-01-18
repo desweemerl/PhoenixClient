@@ -91,6 +91,7 @@ private class ClientImpl(
         timeout: DynamicTimeout,
         joinRef: String? = null,
         noReply: Boolean = false,
+        retries: Int = 3,
     ): Result<IncomingMessage?> {
         val channel = channels[topic]
 
@@ -105,53 +106,69 @@ private class ClientImpl(
             }
         }
 
-        val sendTimer = timer(timeout) {
-            if (channel != null && channel.state.value != ChannelState.JOINED) {
-                if (event == "phx_join") {
-                    if (state.value != ConnectionState.CONNECTED) {
-                        throw BadActionException(
-                            "Failed to join channel with topic '${channel.topic}' because WebSocket is not connected"
-                        )
-                    }
-                } else {
-                    logger.debug(
-                        "Waiting for channel with topic '${channel.topic}' to join before sending "
-                                + "message with event='$event' and payload='$payload'"
-                    )
+        var sendTimer : Timer<IncomingMessage?>? = null
+        var attempt = 0
+        var finished = false
 
-                    waitUntil(1) {
-                        channel.state.value == ChannelState.JOINED
+        while (attempt < retries && !finished) {
+            attempt++
+
+            sendTimer = timer(timeout) {
+                if (channel != null && channel.state.value != ChannelState.JOINED) {
+                    if (event == "phx_join") {
+                        if (state.value != ConnectionState.CONNECTED) {
+                            throw BadActionException(
+                                "Failed to join channel with topic '${channel.topic}' because WebSocket is not connected"
+                            )
+                        }
+                    } else {
+                        logger.debug(
+                            "Waiting for channel with topic '${channel.topic}' to join before sending "
+                                    + "message with event='$event' and payload='$payload'"
+                        )
+
+                        waitUntil(1) {
+                            channel.state.value == ChannelState.JOINED
+                        }
                     }
                 }
-            }
 
-            val ref = messageRef().toString()
-            val outgoingMessage = OutgoingMessage(topic, event, payload, ref, joinRef)
-            webSocketEngine.send(outgoingMessage)
+                val ref = messageRef().toString()
+                val outgoingMessage = OutgoingMessage(topic, event, payload, ref, joinRef)
+                webSocketEngine.send(outgoingMessage)
 
-            if (noReply) {
-                null
-            } else {
+                if (noReply) {
+                    finished = true
+                    return@timer null
+                }
+
                 waitUntil(1) {
                     messageBuffer.containsKey(ref)
                 }
 
                 val message = messageBuffer.remove(ref)!!
+                val reply = message.toReply().getOrNull()
 
-                if (message.toReply().getOrNull()?.isError() == true) {
+                if (reply?.isError() == true) {
+                    if (reply.isTopicClosed() && attempt < retries) {
+                        return@timer null
+                    }
+
+                    finished = true
                     throw ResponseException(
-                        "Phoenix returned an error for message with ref '${ref}",
+                        "Phoenix returned an error for message with ref '${ref}'",
                         message
                     )
                 }
 
+                finished = true
                 message
             }
+
+            sendTimer.start()
         }
 
-        sendTimer.start()
-
-        return sendTimer.lastResult!!
+        return sendTimer!!.lastResult!!
     }
 
     private fun dirtyCloseChannels() {
@@ -295,7 +312,13 @@ private class ClientImpl(
                 delay(heartbeatInterval)
 
                 if (_state.value == ConnectionState.CONNECTED
-                    && send("phoenix", "heartbeat", emptyPayload, heartbeatTimeout.toDynamicTimeout()).isFailure
+                    && send(
+                        topic = "phoenix",
+                        event = "heartbeat",
+                        payload = emptyPayload,
+                        timeout = heartbeatTimeout.toDynamicTimeout(),
+                        retries = 1
+                    ).isFailure
                 ) {
                     webSocketEngine.close()
                 }
