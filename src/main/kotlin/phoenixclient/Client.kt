@@ -80,6 +80,7 @@ private class ClientImpl(
 
     // Incoming messages
     private val _messages = MutableSharedFlow<IncomingMessage>(extraBufferCapacity = 100)
+
     // Shared flow with replay of 1 to avoid loss of messages (collecting flow after receiving the message)
     private val refMessages = MutableSharedFlow<IncomingMessage>(replay = 1, extraBufferCapacity = 100)
     override val messages = _messages.asSharedFlow()
@@ -101,7 +102,6 @@ private class ClientImpl(
         timeout: DynamicTimeout,
         joinRef: String? = null,
         noReply: Boolean = false,
-        crashRetries: Int = 3,
     ): Result<IncomingMessage?> {
         val channel = channels[topic]
 
@@ -118,84 +118,77 @@ private class ClientImpl(
             )
         }
 
-        var retry = 0
         var result: Result<IncomingMessage?>? = null
 
-        outerLoop@ while (retry++ <= crashRetries) {
-            var attempt = 0
 
-            innerLoop@ while (true) {
-                val currentTimeout: Long = timeout(attempt)
-                    ?: return Result.failure(TimeoutException("number of attempt ($attempt) exceeds limit"))
+        var attempt = 0
 
-                val ref = messageRef().toString()
+        while (true) {
+            val currentTimeout: Long = timeout(attempt)
+                ?: return Result.failure(TimeoutException("number of attempt ($attempt) exceeds limit"))
 
-                try {
-                    withTimeout(currentTimeout) {
-                        if (channel != null && channel.state.value != ChannelState.JOINED) {
-                            if (event == "phx_join") {
-                                if (state.value.connectionState != ConnectionState.CONNECTED) {
-                                    result = Result.failure(
-                                        BadActionException("failed to join channel with topic '${channel.topic}' because WebSocket is not connected")
-                                    )
-                                    return@withTimeout
-                                }
-                            } else {
-                                logger.debug(
-                                    "Waiting for channel with topic '${channel.topic}' to join before sending "
-                                            + "message with event='$event' and payload='$payload'"
+            val ref = messageRef().toString()
+
+            try {
+                withTimeout(currentTimeout) {
+                    if (channel != null && channel.state.value != ChannelState.JOINED) {
+                        if (event == "phx_join") {
+                            if (state.value.connectionState != ConnectionState.CONNECTED) {
+                                result = Result.failure(
+                                    BadActionException("failed to join channel with topic '${channel.topic}' because WebSocket is not connected")
                                 )
-
-                                channel.state.filter { it == ChannelState.JOINED }.first()
+                                return@withTimeout
                             }
-                        }
+                        } else {
+                            logger.debug(
+                                "Waiting for channel with topic '${channel.topic}' to join before sending "
+                                        + "message with event='$event' and payload='$payload'"
+                            )
 
-                        val outgoingMessage = OutgoingMessage(topic, event, payload, ref, joinRef)
-
-                        if (noReply) {
-                            webSocketEngine.send(outgoingMessage)
-                            result = Result.success(null)
-                            return@withTimeout
-                        }
-
-                        val flows = arrayOf(
-                            refMessages.filter { it.ref == ref }.map { Result.success(it) },
-                            if (topic != "phoenix" && event != "phx_join" && channel != null) {
-                                channel.state.filter { it != ChannelState.JOINED }.map {
-                                    Result.failure(ChannelException("Channel with topic '$topic' was closed"))
-                                }
-                            } else {
-                                null
-                            }
-                        )
-
-                        val flow = merge(*flows.filterNotNull().toTypedArray())
-                        webSocketEngine.send(outgoingMessage)
-                        result = flow.first()
-
-                        result?.getOrNull()?.let {
-                            if (it.hasStatus("error")) {
-                                logger.debug("Incoming message with ref '$ref' contains error: $it")
-                                result = Result.failure(ResponseException("get an error in request with ref '$ref'", it))
-                            }
+                            channel.state.filter { it == ChannelState.JOINED }.first()
                         }
                     }
-                } catch (ex: TimeoutCancellationException) {
-                    result = Result.failure(TimeoutException("request with ref '$ref' timed out"))
-                } catch (ex: Exception) {
-                    result = Result.failure(ex)
-                }
 
-                if (result?.exceptionOrNull() is ResponseException
-                    || result?.exceptionOrNull() is ChannelException
-                ) {
-                    break@innerLoop
-                } else if (result != null && result?.exceptionOrNull() !is TimeoutException) {
-                    break@outerLoop
-                }
+                    val outgoingMessage = OutgoingMessage(topic, event, payload, ref, joinRef)
 
-                attempt++
+                    if (noReply) {
+                        webSocketEngine.send(outgoingMessage)
+                        result = Result.success(null)
+                        return@withTimeout
+                    }
+
+                    val flows = arrayOf(
+                        refMessages.filter { it.ref == ref }.map { Result.success(it) },
+                        if (topic != "phoenix" && event != "phx_join" && channel != null) {
+                            channel.state.filter { it != ChannelState.JOINED }.map {
+                                Result.failure(ChannelException("Channel with topic '$topic' was closed"))
+                            }
+                        } else {
+                            null
+                        }
+                    )
+
+                    val flow = merge(*flows.filterNotNull().toTypedArray())
+                    webSocketEngine.send(outgoingMessage)
+                    result = flow.first()
+
+                    result?.getOrNull()?.let {
+                        if (it.isError() || it.hasStatus("error")) {
+                            result = Result.failure(ResponseException("get an error in request with ref '$ref'", it))
+                        }
+                    }
+                }
+            } catch (ex: TimeoutCancellationException) {
+                result = Result.failure(TimeoutException("request with ref '$ref' timed out"))
+            } catch (ex: Exception) {
+                result = Result.failure(ex)
             }
+
+            if (result != null && result?.exceptionOrNull() !is TimeoutException) {
+                break
+            }
+
+            attempt++
         }
 
         return result ?: Result.failure(ChannelException("no response found"))
@@ -314,7 +307,7 @@ private class ClientImpl(
 
             if (newState != null) {
                 logger.debug("Receiving new state '$newState' from WebSocket engine")
-                _state.update {ClientState(active = it.active, connectionState = newState) }
+                _state.update { ClientState(active = it.active, connectionState = newState) }
             }
         }
 
@@ -331,7 +324,6 @@ private class ClientImpl(
                     event = "heartbeat",
                     payload = emptyPayload,
                     timeout = heartbeatTimeout.toDynamicTimeout(),
-                    crashRetries = 1
                 )
                 if (result.isFailure) {
                     logger.debug("Reconnecting WebSocket because heartbeat gave error: ${result.exceptionOrNull()?.message}")

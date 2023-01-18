@@ -75,29 +75,6 @@ class ChannelTest {
 
     @RepeatedTest(10)
     @ExperimentalCoroutinesApi
-    fun testChannelCrash() = runTest {
-        withContext(Dispatchers.Default) {
-            withTimeout(5000) {
-                val client = getClient()
-                var result: Result<Reply>? = null
-                val job = launch {
-                    client.state.waitConnected()
-                    val channel = client.join("test:1").getOrThrow()
-                    channel.pushNoReply("crash_channel")
-                    result = channel.push("hello", TestPayload(name = "toto"), 100L)
-                }
-
-                client.connect(mapOf("token" to "user1234"))
-                job.join()
-                client.disconnect()
-
-                assert(result?.isSuccess == true)
-            }
-        }
-    }
-
-    @RepeatedTest(10)
-    @ExperimentalCoroutinesApi
     fun testChannelCrashRejoin() = runTest {
         withContext(Dispatchers.Default) {
             withTimeout(5000) {
@@ -122,6 +99,28 @@ class ChannelTest {
                 client.disconnect()
 
                 assert(countJoined == 2)
+            }
+        }
+    }
+
+    @RepeatedTest(10)
+    @ExperimentalCoroutinesApi
+    fun testChannelWrongChannel() = runTest {
+        withContext(Dispatchers.Default) {
+            withTimeout(5000) {
+                val client = getClient()
+
+                val job = launch {
+                    client.state.waitConnected()
+                    val channel = client.join("test:1").getOrThrow()
+
+                    assert(channel.push("wrong_request").exceptionOrNull() is ChannelException)
+                    assert(channel.push("hello", TestPayload(name = "toto"), 100L).isSuccess)
+                }
+
+                client.connect(mapOf("token" to "user1234"))
+                job.join()
+                client.disconnect()
             }
         }
     }

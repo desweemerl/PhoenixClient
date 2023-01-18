@@ -13,6 +13,11 @@ defmodule PhoenixClientTestWeb.Channel do
     {:noreply, socket}
   end
 
+  def handle_in("wrong_request", _payload, socket) do
+    :ok = :error
+    {:reply, {:ok, "please don't retry"}, socket}
+  end
+
   def handle_in("hello", %{"name" => name}, socket) do
     {:reply, {:ok, %{message: "hello #{name}"}}, socket}
   end

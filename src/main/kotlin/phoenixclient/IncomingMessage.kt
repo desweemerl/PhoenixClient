@@ -90,9 +90,15 @@ val Forbidden = IncomingMessage(topic = "phoenix", event = "forbidden")
 val SocketClose = IncomingMessage(topic = "phoenix", event = "socket_close")
 val Failure = IncomingMessage(topic = "phoenix", event = "failure")
 
+data class Reason(
+    val reason: String
+)
+
 fun IncomingMessage.isError(): Boolean = event == "phx_error"
 fun IncomingMessage.hasStatus(status: String): Boolean =
     payload?.convertTo(String::class, "status")?.getOrNull() == status
+fun IncomingMessage.hasReason(reason: String): Boolean =
+    payload?.convertTo(Reason::class, "response")?.getOrNull()?.reason == reason
 
 fun Flow<IncomingMessage>.filterTopic(topic: String) = filter { it.topic == topic }
 fun Flow<IncomingMessage>.filterEvent(event: String) = filter { it.event == event }
