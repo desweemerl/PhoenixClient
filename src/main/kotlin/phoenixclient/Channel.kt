@@ -20,8 +20,8 @@ interface Channel {
     suspend fun pushNoReply(event: String, payload: Map<String, Any?> = mapOf()): Result<Unit>
     suspend fun pushNoReply(event: String, payload: Map<String, Any?>, timeout: Long): Result<Unit>
 
-    suspend fun push(event: String, payload: Map<String, Any?> = mapOf()): Result<IncomingMessage>
-    suspend fun push(event: String, payload: Map<String, Any?>, timeout: Long): Result<IncomingMessage>
+    suspend fun push(event: String, payload: Map<String, Any?> = mapOf()): Result<Reply>
+    suspend fun push(event: String, payload: Map<String, Any?>, timeout: Long): Result<Reply>
 
     suspend fun leave()
 }
@@ -64,8 +64,10 @@ internal class ChannelImpl(
         push(event, payload, defaultTimeout)
 
     override suspend fun push(event: String, payload: Map<String, Any?>, timeout: Long)
-            : Result<IncomingMessage> =
-        sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef, false).map { it!! }
+            : Result<Reply> =
+        sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef, false).fold(
+            { it!!.toReply() }, { Result.failure(it) }
+        )
 
     override suspend fun leave() {
         disposeFromSocket(topic)

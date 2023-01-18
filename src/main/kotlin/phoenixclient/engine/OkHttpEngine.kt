@@ -110,14 +110,7 @@ class OkHttpEngine(
                     val message = when (response?.message?.lowercase()) {
                         "forbidden" -> Forbidden
                         "socket close" -> SocketClose
-                        else -> IncomingMessage(
-                            topic = "phoenix",
-                            event = "failure",
-                            reply = ReplyInternalError(
-                                throwable = t,
-                                message = response?.message,
-                            ),
-                        )
+                        else -> Failure
                     }
 
                     trySendBlocking(

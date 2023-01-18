@@ -1,5 +1,6 @@
 package phoenixclient
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.takeWhile
@@ -14,9 +15,10 @@ class ReplyMessage(val message: String)
 class ChannelTest {
 
     @Test
+    @ExperimentalCoroutinesApi
     fun testChannelJoinAndRef() = runTest {
         val client = getClient()
-        var message1: IncomingMessage? = null
+        var message1: Reply? = null
         var message2: IncomingMessage? = null
 
         val job1 = launch {
@@ -33,7 +35,6 @@ class ChannelTest {
             }
         }
 
-
         client.connect(mapOf("token" to "user1234"))
 
         waitWhile(1, 5000L) {
@@ -44,13 +45,12 @@ class ChannelTest {
         job2.cancel()
         client.disconnect()
 
-        listOf(message1, message2).forEach { message ->
-            assert(message?.reply?.convertTo(ReplyMessage::class)?.getOrNull()?.message == "hello toto")
-            assert(Regex("""^\d+$""").matches(message?.ref!!))
-        }
+        assert(message1?.convertTo(ReplyMessage::class)?.getOrNull()?.message == "hello toto")
+        assert(Regex("""^\d+$""").matches(message2?.ref!!))
     }
 
     @Test
+    @ExperimentalCoroutinesApi
     fun testChannelDisconnection() = runTest {
         val client = getClient()
         var connection = 0
@@ -106,6 +106,7 @@ class ChannelTest {
 
 
     @RepeatedTest(5)
+    @ExperimentalCoroutinesApi
     fun testChannelBatch() = runTest {
         val client = getClient()
         var counter1 = 0
@@ -146,6 +147,7 @@ class ChannelTest {
     }
 
     @Test
+    @ExperimentalCoroutinesApi
     fun testChannelMessages() = runTest {
         val client = getClient()
         var message: IncomingMessage? = null
@@ -176,7 +178,7 @@ class ChannelTest {
         job.cancel()
         client.disconnect()
 
-        assert(message?.reply?.convertTo(ReplyMessage::class)?.getOrNull()?.message == "hello toto")
+        assert(message?.payload?.convertTo(ReplyMessage::class, "response")?.getOrNull()?.message == "hello toto")
     }
 
     private fun getClient(

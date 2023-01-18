@@ -40,4 +40,10 @@ defmodule PhoenixClientTestWeb.Channel do
 
     {:reply, {:ok, %{list: response}}, socket}
   end
+
+  def handle_in("deserialize_event", _payload, socket) do
+    push(socket, "test_event", build_reply_object())
+
+    {:noreply, socket}
+  end
 end

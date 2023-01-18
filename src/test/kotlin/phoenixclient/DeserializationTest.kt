@@ -1,12 +1,12 @@
 package phoenixclient
 
 import com.google.gson.annotations.SerializedName
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
-import kotlin.reflect.KClass
 
 class DeserializationTest {
 
@@ -24,17 +24,19 @@ class DeserializationTest {
     )
 
     @Test
+    @ExperimentalCoroutinesApi
     fun testDeserializeObject() = runTest {
         val client = getClient()
         var response: TestReplyObject? = null
 
         val job = launch {
             client.state.isConnected().map {
-                response = client
+                val reply = client
                     .join("test:1").getOrThrow()
                     .push("deserialize_object")
-                    .getOrThrow().reply
-                    ?.convertTo(TestReplyObject::class)?.getOrThrow()
+                    .getOrThrow()
+
+                response = reply.convertTo(TestReplyObject::class).getOrThrow()
             }.first()
         }
 
@@ -56,23 +58,25 @@ class DeserializationTest {
     }
 
     @Test
+    @ExperimentalCoroutinesApi
     fun testDeserializeList() = runTest {
         val client = getClient()
         var response: TestListReplyObject? = null
 
         val job = launch {
             client.state.isConnected().map {
-                response = client
+                val reply = client
                     .join("test:1").getOrThrow()
                     .push("deserialize_list")
-                    .getOrThrow().reply
-                    ?.convertTo(TestListReplyObject::class)?.getOrThrow()
+                    .getOrThrow()
+
+                response = reply.convertTo(TestListReplyObject::class).getOrThrow()
             }.first()
         }
 
         client.connect(mapOf("token" to "user1234"))
 
-        waitWhile(1, 50000L) {
+        waitWhile(1, 5000L) {
             response == null
         }
 
@@ -89,29 +93,70 @@ class DeserializationTest {
     }
 
     @Test
+    @ExperimentalCoroutinesApi
     fun testDeserializeListFailed() = runTest {
         val client = getClient()
         var response: Result<TestListReplyObject>? = null
 
         val job = launch {
             client.state.isConnected().map {
-                response = client
+                val reply = client
                     .join("test:1").getOrThrow()
                     .push("deserialize_list_failed")
-                    .getOrThrow().reply
-                    ?.convertTo(TestListReplyObject::class)
+                    .getOrThrow()
+
+                response = reply.convertTo(TestListReplyObject::class)
             }.first()
         }
 
         client.connect(mapOf("token" to "user1234"))
 
-        waitWhile(1, 50000L) {
+        waitWhile(1, 5000L) {
             response == null
         }
 
         job.cancel()
 
-        assert(response!!.exceptionOrNull()!!.message!!.contains("Not a JSON Object"))
+        assert(response!!.exceptionOrNull()!!.message!!
+            .contains("Expected BEGIN_OBJECT but was BEGIN_ARRAY at path"))
+    }
+
+    @Test
+    @ExperimentalCoroutinesApi
+    fun testDeserializeEvent() = runTest {
+        val client = getClient()
+        var response: TestReplyObject? = null
+
+        val job1 = launch {
+            client.state.isConnected().map {
+                client
+                    .join("test:1").getOrThrow()
+                    .pushNoReply("deserialize_event")
+            }.first()
+        }
+
+        val job2 = launch {
+            response = client.messages
+                .filterEvent("test_event").first()
+                .payload!!.convertTo(TestReplyObject::class).getOrThrow()
+        }
+
+        client.connect(mapOf("token" to "user1234"))
+
+        waitWhile(1, 5000L) {
+            response == null
+        }
+
+        job1.cancel()
+        job2.cancel()
+
+        assert(
+            response == TestReplyObject(
+                valueString = "test1234",
+                valueNumber = -1234.5678f,
+                valueBoolean = true,
+            )
+        )
     }
 
     private fun getClient(

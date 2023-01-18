@@ -136,15 +136,17 @@ private class ClientImpl(
                 waitUntil(1) {
                     messageBuffer.containsKey(ref)
                 }
-                val message = messageBuffer.remove(ref)
 
-                if (message?.isError() == true || message?.isReplyError() == true) {
+                val message = messageBuffer.remove(ref)!!
+
+                if (message.isError() == true || message.toReply().getOrNull()?.isError() == true) {
                     rejoinChannel(topic)
                     throw ResponseException(
                         "Phoenix returned an error for message with ref '${ref}",
                         message
                     )
                 }
+
                 message
             }
         }

@@ -1,5 +1,6 @@
 package phoenixclient
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -9,7 +10,7 @@ import org.junit.jupiter.api.Test
 class ClientTest {
 
     @Test
-    @kotlinx.coroutines.ExperimentalCoroutinesApi
+    @ExperimentalCoroutinesApi
     fun testUnauthorizedConnection() = runTest {
         var forbidden = false
         val client = getClient()
@@ -36,7 +37,7 @@ class ClientTest {
     }
 
     @Test
-    @kotlinx.coroutines.ExperimentalCoroutinesApi
+    @ExperimentalCoroutinesApi
     fun testAuthorizedConnection() = runTest {
         val client = getClient()
         var isConnected = false

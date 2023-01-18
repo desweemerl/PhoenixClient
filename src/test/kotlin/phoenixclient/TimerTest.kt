@@ -21,6 +21,7 @@ class TimerTest {
         }
 
     @Test
+    @ExperimentalCoroutinesApi
     fun testTimerTimeout() = runTest {
         var counter = 0
         val timer = timer(finiteTimeout) {
@@ -37,6 +38,7 @@ class TimerTest {
     }
 
     @Test
+    @ExperimentalCoroutinesApi
     fun testTimerSecondSucceeded() = runTest {
         var counter = 0
         val timer = timer(finiteTimeout) {
@@ -54,6 +56,7 @@ class TimerTest {
     }
 
     @Test
+    @ExperimentalCoroutinesApi
     fun testTimerLastSucceeded() = runTest {
         var counter = 0
 
@@ -72,6 +75,7 @@ class TimerTest {
     }
 
     @Test
+    @ExperimentalCoroutinesApi
     fun testTimerFlowSucceeded() = runTest {
         val message = MutableSharedFlow<String>()
         val timer = timer(infiniteTimeout) {
@@ -92,6 +96,7 @@ class TimerTest {
 
 
     @Test
+    @ExperimentalCoroutinesApi
     fun testTimerFlowFailed() = runTest {
         val message = MutableSharedFlow<String>()
         val timer = timer(infiniteTimeout) {
