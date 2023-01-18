@@ -25,7 +25,7 @@ class ChannelTest {
             message1 = client.state.isConnected().map {
                 client
                     .join("test:1").getOrThrow()
-                    .push("hello", mapOf("name" to "toto")).getOrThrow()
+                    .push("hello", TestPayload(name = "toto")).getOrThrow()
             }.first()
         }
 
@@ -88,7 +88,7 @@ class ChannelTest {
                 .collect {
                     val channel = client.join("test:1").getOrThrow()
                     channel.pushNoReply("crash_channel")
-                    exception = channel.push("hello", mapOf("name" to "toto"), 1000L).exceptionOrNull()
+                    exception = channel.push("hello", TestPayload(name = "toto"), 1000L).exceptionOrNull()
                 }
         }
 
@@ -118,7 +118,7 @@ class ChannelTest {
                     val channel = client.join("test:1").getOrThrow()
                     repeat(1000) {
                         val name = "toto$counter1"
-                        channel.push("hello", mapOf("name" to name), 100L).getOrThrow()
+                        channel.push("hello", TestPayload(name = name), 100L).getOrThrow()
                         counter1++
                     }
                 }
@@ -165,7 +165,7 @@ class ChannelTest {
                         }
                     }
 
-                    channel.push("hello", mapOf("name" to "toto"), 100L).getOrThrow()
+                    channel.push("hello", TestPayload(name = "toto"), 100L).getOrThrow()
                 }
         }
 

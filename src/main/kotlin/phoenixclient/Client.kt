@@ -22,8 +22,8 @@ interface Client {
     fun connect(params: Map<String, String>)
     suspend fun disconnect()
 
-    suspend fun join(topic: String, payload: Map<String, Any?> = mapOf()): Result<Channel>
-    suspend fun join(topic: String, payload: Map<String, Any?>, timeout: DynamicTimeout): Result<Channel>
+    suspend fun join(topic: String, payload: Any = emptyPayload): Result<Channel>
+    suspend fun join(topic: String, payload: Any, timeout: DynamicTimeout): Result<Channel>
 }
 
 fun refGenerator(): () -> Long {
@@ -87,7 +87,7 @@ private class ClientImpl(
     private suspend fun send(
         topic: String,
         event: String,
-        payload: Map<String, Any?>,
+        payload: Any,
         timeout: DynamicTimeout,
         joinRef: String? = null,
         noReply: Boolean = false,
@@ -175,12 +175,12 @@ private class ClientImpl(
         }
     }
 
-    override suspend fun join(topic: String, payload: Map<String, Any?>): Result<Channel> =
+    override suspend fun join(topic: String, payload: Any): Result<Channel> =
         join(topic, payload, defaultTimeout.toDynamicTimeout(true))
 
-    override suspend fun join(topic: String, payload: Map<String, Any?>, timeout: DynamicTimeout): Result<Channel> {
+    override suspend fun join(topic: String, payload: Any, timeout: DynamicTimeout): Result<Channel> {
         val channel = channels.getOrPut(topic) {
-            val sendToSocket: suspend (String, Map<String, Any?>, DynamicTimeout, String?, Boolean)
+            val sendToSocket: suspend (String, Any, DynamicTimeout, String?, Boolean)
             -> Result<IncomingMessage?> =
                 { event, payload, channelTimeout, joinRef, noReply ->
                     send(topic, event, payload, channelTimeout, joinRef, noReply)
@@ -296,7 +296,7 @@ private class ClientImpl(
                 delay(heartbeatInterval)
 
                 if (_state.value == ConnectionState.CONNECTED
-                    && send("phoenix", "heartbeat", mapOf(), heartbeatTimeout.toDynamicTimeout()).isFailure
+                    && send("phoenix", "heartbeat", emptyPayload, heartbeatTimeout.toDynamicTimeout()).isFailure
                 ) {
                     webSocketEngine.close()
                 }

@@ -3,6 +3,10 @@ package phoenixclient
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Test
 
+data class TestPayload(
+    val name: String
+)
+
 class OutgoingMessageTest {
 
     @Test
@@ -12,10 +16,25 @@ class OutgoingMessageTest {
             ref = "2",
             topic = "test",
             event = "myEvent",
-            payload = mapOf("toto" to "hello")
+            payload = mapOf("name" to "hello")
         )
         val output = message.toJson()
-        val expected = """["1","2","test","myEvent",{"toto":"hello"}]"""
+        val expected = """["1","2","test","myEvent",{"name":"hello"}]"""
+
+        Assertions.assertEquals(output, expected)
+    }
+
+    @Test
+    fun testMessageWithPayloadClassSerialization() {
+        val message = OutgoingMessage(
+            joinRef = "1",
+            ref = "2",
+            topic = "test",
+            event = "myEvent",
+            payload = TestPayload(name = "hello")
+        )
+        val output = message.toJson()
+        val expected = """["1","2","test","myEvent",{"name":"hello"}]"""
 
         Assertions.assertEquals(output, expected)
     }

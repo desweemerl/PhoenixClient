@@ -17,11 +17,11 @@ interface Channel {
     val state: Flow<ChannelState>
     val messages: Flow<IncomingMessage>
 
-    suspend fun pushNoReply(event: String, payload: Map<String, Any?> = mapOf()): Result<Unit>
-    suspend fun pushNoReply(event: String, payload: Map<String, Any?>, timeout: Long): Result<Unit>
+    suspend fun pushNoReply(event: String, payload: Any = emptyPayload): Result<Unit>
+    suspend fun pushNoReply(event: String, payload: Any, timeout: Long): Result<Unit>
 
-    suspend fun push(event: String, payload: Map<String, Any?> = mapOf()): Result<Reply>
-    suspend fun push(event: String, payload: Map<String, Any?>, timeout: Long): Result<Reply>
+    suspend fun push(event: String, payload: Any = emptyPayload): Result<Reply>
+    suspend fun push(event: String, payload: Any, timeout: Long): Result<Reply>
 
     suspend fun leave()
 }
@@ -32,12 +32,12 @@ internal class ChannelImpl(
 
     private val sendToSocket: suspend (
         event: String,
-        payload: Map<String, Any?>,
+        payload: Any,
         timeout: DynamicTimeout,
         joinRef: String?,
         noRepy: Boolean,
     )
-        -> Result<IncomingMessage?>,
+    -> Result<IncomingMessage?>,
     private val disposeFromSocket: suspend (topic: String) -> Unit,
     private val defaultTimeout: Long = DEFAULT_TIMEOUT,
 ) : Channel {
@@ -46,7 +46,7 @@ internal class ChannelImpl(
     private val _state = MutableStateFlow(ChannelState.CLOSE)
     override val state = _state.asStateFlow()
 
-    private var joinPayload: Map<String, Any?>? = null
+    private var joinPayload: Any? = null
     private var joinRef: String? = null
 
     internal val isJoinedOnce: Boolean
@@ -54,20 +54,32 @@ internal class ChannelImpl(
             return joinRef != null
         }
 
-    override suspend fun pushNoReply(event: String, payload: Map<String, Any?>): Result<Unit> =
+
+    private fun <T> nonJoinedFailure(): Result<T> =
+        Result.failure(BadActionException("Pushing message on non-joined channel is not allowed"))
+
+    override suspend fun pushNoReply(event: String, payload: Any): Result<Unit> =
         pushNoReply(event, payload, defaultTimeout)
 
-    override suspend fun pushNoReply(event: String, payload: Map<String, Any?>, timeout: Long): Result<Unit> =
-        sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef, true).map { }
+    override suspend fun pushNoReply(event: String, payload: Any, timeout: Long): Result<Unit> =
+        if (isJoinedOnce) {
+            sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef, true).map { }
+        } else {
+            nonJoinedFailure()
+        }
 
-    override suspend fun push(event: String, payload: Map<String, Any?>) =
+    override suspend fun push(event: String, payload: Any) =
         push(event, payload, defaultTimeout)
 
-    override suspend fun push(event: String, payload: Map<String, Any?>, timeout: Long)
+    override suspend fun push(event: String, payload: Any, timeout: Long)
             : Result<Reply> =
-        sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef, false).fold(
-            { it!!.toReply() }, { Result.failure(it) }
-        )
+        if (isJoinedOnce) {
+            sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef, false).fold(
+                { it!!.toReply() }, { Result.failure(it) }
+            )
+        } else {
+            nonJoinedFailure()
+        }
 
     override suspend fun leave() {
         disposeFromSocket(topic)
@@ -88,7 +100,7 @@ internal class ChannelImpl(
         _state.update { ChannelState.LEAVING }
         joinRef = null
 
-        push("phx_leave", mapOf(), timeout)
+        push("phx_leave", emptyPayload, timeout)
             .getOrNull()?.let {
                 // Don't care about the result.
                 _state.update { ChannelState.CLOSE }
@@ -99,11 +111,11 @@ internal class ChannelImpl(
         if (joinRef == null) {
             Result.failure(BadActionException("Channel with topic '$topic' was never joined"))
         } else {
-            join(joinPayload ?: mapOf(), timeout)
+            join(joinPayload ?: emptyPayload, timeout)
         }
 
     internal suspend fun join(
-        payload: Map<String, Any?> = mapOf(),
+        payload: Any = emptyPayload,
         timeout: DynamicTimeout = DEFAULT_REJOIN_TIMEOUT,
     ): Result<Channel> =
         when (state.value) {
