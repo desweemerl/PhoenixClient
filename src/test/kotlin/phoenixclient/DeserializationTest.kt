@@ -1,10 +1,8 @@
 package phoenixclient
 
 import com.google.gson.annotations.SerializedName
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 
@@ -26,137 +24,131 @@ class DeserializationTest {
     @Test
     @ExperimentalCoroutinesApi
     fun testDeserializeObject() = runTest {
-        val client = getClient()
-        var response: TestReplyObject? = null
+        withContext(Dispatchers.Default) {
+            withTimeout(5000) {
+                val client = getClient()
+                var response: TestReplyObject? = null
 
-        val job = launch {
-            client.state.isConnected().map {
-                val reply = client
-                    .join("test:1").getOrThrow()
-                    .push("deserialize_object")
-                    .getOrThrow()
+                val job = launch {
+                    client.state.waitConnected()
 
-                response = reply.convertTo(TestReplyObject::class).getOrThrow()
-            }.first()
+                    val reply = client
+                        .join("test:1").getOrThrow()
+                        .push("deserialize_object")
+                        .getOrThrow()
+                    response = reply.convertTo(TestReplyObject::class).getOrThrow()
+                }
+
+                client.connect(mapOf("token" to "user1234"))
+                job.join()
+
+                assert(
+                    response == TestReplyObject(
+                        valueString = "test1234",
+                        valueNumber = -1234.5678f,
+                        valueBoolean = true,
+                    )
+                )
+            }
         }
-
-        client.connect(mapOf("token" to "user1234"))
-
-        waitWhile(1, 5000L) {
-            response == null
-        }
-
-        job.cancel()
-
-        assert(
-            response == TestReplyObject(
-                valueString = "test1234",
-                valueNumber = -1234.5678f,
-                valueBoolean = true,
-            )
-        )
     }
 
     @Test
     @ExperimentalCoroutinesApi
     fun testDeserializeList() = runTest {
-        val client = getClient()
-        var response: TestListReplyObject? = null
+        withContext(Dispatchers.Default) {
+            withTimeout(5000) {
+                val client = getClient()
+                var response: TestListReplyObject? = null
 
-        val job = launch {
-            client.state.isConnected().map {
-                val reply = client
-                    .join("test:1").getOrThrow()
-                    .push("deserialize_list")
-                    .getOrThrow()
+                val job = launch {
+                    client.state.waitConnected()
 
-                response = reply.convertTo(TestListReplyObject::class).getOrThrow()
-            }.first()
+                    val reply = client
+                        .join("test:1").getOrThrow()
+                        .push("deserialize_list")
+                        .getOrThrow()
+                    response = reply.convertTo(TestListReplyObject::class).getOrThrow()
+                }
+
+                client.connect(mapOf("token" to "user1234"))
+                job.join()
+
+                val expected = listOf("_1", "_2").map {
+                    TestReplyObject(
+                        valueString = "test1234${it}",
+                        valueNumber = -1234.5678f,
+                        valueBoolean = true,
+                    )
+                }
+                assert(response?.list == expected)
+            }
         }
-
-        client.connect(mapOf("token" to "user1234"))
-
-        waitWhile(1, 5000L) {
-            response == null
-        }
-
-        job.cancel()
-
-        val expected = listOf("_1", "_2").map {
-            TestReplyObject(
-                valueString = "test1234${it}",
-                valueNumber = -1234.5678f,
-                valueBoolean = true,
-            )
-        }
-        assert(response?.list == expected)
     }
 
     @Test
     @ExperimentalCoroutinesApi
     fun testDeserializeListFailed() = runTest {
-        val client = getClient()
-        var response: Result<TestListReplyObject>? = null
+        withContext(Dispatchers.Default) {
+            withTimeout(5000) {
+                val client = getClient()
+                var response: Result<TestListReplyObject>? = null
 
-        val job = launch {
-            client.state.isConnected().map {
-                val reply = client
-                    .join("test:1").getOrThrow()
-                    .push("deserialize_list_failed")
-                    .getOrThrow()
+                val job = launch {
+                    client.state.waitConnected()
 
-                response = reply.convertTo(TestListReplyObject::class)
-            }.first()
+                    val reply = client
+                        .join("test:1").getOrThrow()
+                        .push("deserialize_list_failed")
+                        .getOrThrow()
+                    response = reply.convertTo(TestListReplyObject::class)
+                }
+
+                client.connect(mapOf("token" to "user1234"))
+                job.join()
+
+                assert(
+                    response!!.exceptionOrNull()!!.message!!
+                        .contains("Expected BEGIN_OBJECT but was BEGIN_ARRAY at path")
+                )
+            }
         }
 
-        client.connect(mapOf("token" to "user1234"))
-
-        waitWhile(1, 5000L) {
-            response == null
-        }
-
-        job.cancel()
-
-        assert(response!!.exceptionOrNull()!!.message!!
-            .contains("Expected BEGIN_OBJECT but was BEGIN_ARRAY at path"))
     }
 
     @Test
     @ExperimentalCoroutinesApi
     fun testDeserializeEvent() = runTest {
-        val client = getClient()
-        var response: TestReplyObject? = null
+        withContext(Dispatchers.Default) {
+            withTimeout(5000) {
+                val client = getClient()
+                var response: TestReplyObject? = null
 
-        val job1 = launch {
-            client.state.isConnected().map {
-                client
-                    .join("test:1").getOrThrow()
-                    .pushNoReply("deserialize_event")
-            }.first()
+                val job1 = launch {
+                    client.state.waitConnected()
+                    client
+                        .join("test:1").getOrThrow()
+                        .pushNoReply("deserialize_event")
+                }
+
+                val job2 = launch {
+                    response = client.messages
+                        .filterEvent("test_event").first()
+                        .payload!!.convertTo(TestReplyObject::class).getOrThrow()
+                }
+
+                client.connect(mapOf("token" to "user1234"))
+                joinAll(job1, job2)
+
+                assert(
+                    response == TestReplyObject(
+                        valueString = "test1234",
+                        valueNumber = -1234.5678f,
+                        valueBoolean = true,
+                    )
+                )
+            }
         }
-
-        val job2 = launch {
-            response = client.messages
-                .filterEvent("test_event").first()
-                .payload!!.convertTo(TestReplyObject::class).getOrThrow()
-        }
-
-        client.connect(mapOf("token" to "user1234"))
-
-        waitWhile(1, 5000L) {
-            response == null
-        }
-
-        job1.cancel()
-        job2.cancel()
-
-        assert(
-            response == TestReplyObject(
-                valueString = "test1234",
-                valueNumber = -1234.5678f,
-                valueBoolean = true,
-            )
-        )
     }
 
     private fun getClient(

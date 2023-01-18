@@ -1,8 +1,9 @@
 package phoenixclient
 
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 
@@ -12,55 +13,97 @@ class ClientTest {
     @Test
     @ExperimentalCoroutinesApi
     fun testUnauthorizedConnection() = runTest {
-        var forbidden = false
-        val client = getClient()
-        val job = launch {
-            client.messages.collect {
-                if (it == Forbidden) {
-                    forbidden = true
+        withContext(Dispatchers.Default) {
+            withTimeout(5000) {
+                var forbidden = false
+                val client = getClient()
+                val job = launch {
+                    forbidden = client.messages.filter { it == Forbidden }.map { true }.first()
                 }
+
+                client.connect(mapOf("token" to "wrongToken"))
+                job.join()
+                client.disconnect()
+
+                assert(forbidden)
+                assert(!client.active)
             }
-
         }
-
-        client.connect(mapOf("token" to "wrongToken"))
-
-        waitWhile(1, 5000) {
-            !forbidden
-        }
-
-        job.cancel()
-        client.disconnect()
-
-        assert(forbidden)
-        assert(!client.active)
     }
 
     @Test
     @ExperimentalCoroutinesApi
     fun testAuthorizedConnection() = runTest {
-        val client = getClient()
-        var isConnected = false
+        withContext(Dispatchers.Default) {
+            withTimeout(5000) {
+                val client = getClient()
+                var isConnected = false
+                val job = launch {
+                    isConnected = client.state.waitConnected()
+                }
 
-        val job = launch {
-            isConnected = client.state.isConnected().first()
+                client.connect(mapOf("token" to "user1234"))
+                job.join()
+                client.disconnect()
+
+                assert(isConnected)
+            }
         }
-
-        client.connect(mapOf("token" to "user1234"))
-
-        waitWhile(1, 5000) {
-            job.isActive
-        }
-
-        job.cancel()
-        client.disconnect()
-
-        assert(isConnected)
     }
 
-    private fun getClient(): Client =
+    @Test
+    @ExperimentalCoroutinesApi
+    fun testHeartbeat() = runTest {
+        withContext(Dispatchers.Default) {
+            val client = getClient(
+                heartbeatTimeout = 1000L,
+                heartbeatInterval = 1000L,
+                defaultTimeout = 1000L,
+            )
+
+            var counter = 0
+
+            val job = launch {
+                client.messages
+                    .filter { it.topic == "phoenix" && it.event == "phx_reply" }
+                    .collect {
+                        counter++
+                    }
+            }
+
+            client.connect(mapOf("token" to "user1234"))
+            client.state.waitConnected()
+
+            delay(4000L)
+            val refCounter = counter
+
+            client.disconnect()
+            client.state.waitDisconnected()
+
+            delay(4000L)
+            assert(counter > 0 && refCounter == counter)
+
+            client.connect(mapOf("token" to "user1234"))
+            client.state.waitConnected()
+
+            delay(4000L)
+            assert(refCounter != counter)
+
+            client.disconnect()
+            job.cancel()
+        }
+    }
+
+    private fun getClient(
+        heartbeatInterval: Long = DEFAULT_HEARTBEAT_INTERVAL,
+        heartbeatTimeout: Long = DEFAULT_HEARTBEAT_TIMEOUT,
+        defaultTimeout: Long = DEFAULT_TIMEOUT,
+    ): Client =
         okHttpPhoenixClient(
             port = 4000,
             ssl = false,
+            heartbeatInterval = heartbeatInterval,
+            heartbeatTimeout = heartbeatTimeout,
+            defaultTimeout = defaultTimeout,
         ).getOrThrow()
 }

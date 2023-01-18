@@ -1,6 +1,5 @@
 package phoenixclient.engine
 
-import kotlinx.coroutines.flow.Flow
 import phoenixclient.ConnectionState
 import phoenixclient.IncomingMessage
 import phoenixclient.OutgoingMessage
@@ -24,7 +23,8 @@ interface WebSocketEngine {
         params: Map<String, String> = mapOf(),
         ssl: Boolean = DEFAULT_WS_SSL,
         untrustedCertificate: Boolean = DEFAULT_UNTRUSTED_CERTIFICATE,
-    ): Flow<WebSocketEvent>
+        receiver: (event: WebSocketEvent) -> Unit = {},
+    )
 
     fun send(message: OutgoingMessage): Result<Unit>
     fun close()

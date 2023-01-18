@@ -33,9 +33,9 @@ class ReplyDeserializer(
 
 fun IncomingMessage.toReply(): Result<Reply> =
     if (payload == null) {
-        Result.failure(Exception("Incoming message has no payload"))
+        Result.failure(Exception("incoming message has no payload"))
     } else if (event != "phx_reply") {
-        Result.failure(Exception("Incoming message is not a reply"))
+        Result.failure(Exception("incoming message is not a reply"))
     } else {
         Result.success(ReplyDeserializer(payload))
     }

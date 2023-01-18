@@ -1,10 +1,5 @@
 package phoenixclient.engine
 
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.channels.onFailure
-import kotlinx.coroutines.channels.trySendBlocking
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
 import mu.KotlinLogging
 import okhttp3.*
 import okhttp3.logging.HttpLoggingInterceptor
@@ -14,7 +9,7 @@ import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 
-fun getHttpClient(): OkHttpClient = OkHttpClient.Builder().build()
+fun getHttpClient(): OkHttpClient = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
 
 fun getUntrustedOkHttpClient(): OkHttpClient {
     val x509UntrustManager = object : X509TrustManager {
@@ -45,6 +40,7 @@ fun getUntrustedOkHttpClient(): OkHttpClient {
     return OkHttpClient.Builder()
         .sslSocketFactory(sslSocketFactory, trustAllCerts[0])
         .hostnameVerifier { _, _ -> true }
+        .retryOnConnectionFailure(false)
         .build()
 }
 
@@ -63,7 +59,8 @@ class OkHttpEngine(
         params: Map<String, String>,
         ssl: Boolean,
         untrustedCertificate: Boolean,
-    ): Flow<WebSocketEvent> = callbackFlow {
+        receiver: (event: WebSocketEvent) -> Unit,
+    ) {
         var closed = false
         val client = if (ssl && untrustedCertificate)
             getUntrustedOkHttpClient() else getHttpClient()
@@ -78,33 +75,26 @@ class OkHttpEngine(
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (!closed) {
-                    trySendBlocking(WebSocketEvent(state = ConnectionState.CONNECTED))
-                        .onFailure {
-                            logger.error("Failed to send state CONNECTED")
-                        }
+                    receiver(WebSocketEvent(state = ConnectionState.CONNECTED))
                 }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 if (!closed) {
-                    trySendBlocking(WebSocketEvent(state = ConnectionState.DISCONNECTED))
-                        .onFailure {
-                            logger.error("Failed to send state DISCONNECTED")
-                        }
+                    receiver(WebSocketEvent(state = ConnectionState.DISCONNECTED))
+                    closed = true
                 }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (!closed) {
-                    trySendBlocking(WebSocketEvent(state = ConnectionState.DISCONNECTED))
-                        .onFailure {
-                            logger.error("Failed to send state DISCONNECTED")
-                        }
+                    receiver(WebSocketEvent(state = ConnectionState.DISCONNECTED))
+                    closed = true
                 }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                logger.error("Got a failure on webSocket: " + t.stackTraceToString())
+                logger.error("Got a failure on WebSocket: " + t.message)
 
                 if (!closed) {
                     val message = when (response?.message?.lowercase()) {
@@ -113,54 +103,40 @@ class OkHttpEngine(
                         else -> Failure
                     }
 
-                    trySendBlocking(
+                    receiver(
                         WebSocketEvent(
                             state = ConnectionState.DISCONNECTED,
                             message = message,
                         )
                     )
-                        .onFailure {
-                            logger.error("Failed to send failure event: $message")
-                        }
                 }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                trySendBlocking(WebSocketEvent(message = deserializer(text)))
-                    .onFailure {
-                        logger.error("Failed to receive message: ${it?.stackTraceToString()}")
-                    }
+                receiver(WebSocketEvent(message = deserializer(text)))
             }
         }
 
         try {
             ws = client.newWebSocket(request, listener)
         } catch (ex: Exception) {
-            logger.error("Failed to setup webSocket: " + ex.printStackTrace())
+            logger.error("Failed to setup WebSocket: " + ex.printStackTrace())
             throw ex
-        }
-
-        awaitClose {
-            ws?.let {
-                logger.info("Unregistering webSocket callbacks")
-                it.close(1001, "Closing request")
-                closed = true
-            }
         }
     }
 
     override fun send(message: OutgoingMessage): Result<Unit> =
         try {
-            logger.debug("Send message $message to web socket")
+            logger.debug("Send message $message to WebSocket")
             ws!!.send(serializer(message))
             Result.success(Unit)
         } catch (ex: Exception) {
-            logger.error("Send message $message to web socket: ${ex.stackTraceToString()}")
+            logger.error("Failed to send message $message to WebSocket: ${ex.stackTraceToString()}")
             Result.failure(ex)
         }
 
     override fun close() {
-        logger.info("Closing webSocket")
-        ws?.close(1001, "Closing webSocket")
+        logger.info("Closing WebSocket")
+        ws?.close(1001, "Closing WebSocket")
     }
 }

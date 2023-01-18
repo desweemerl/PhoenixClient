@@ -25,10 +25,11 @@ dependencies {
     implementation "com.google.code.gson:gson:2.8.9"
 
     // Companion library for Kotlin
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.0-RC3"
-    testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.6.0-RC3"
+    def coroutine_version = "1.6.4"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutine_version"
+    testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:$coroutine_version"
 
-    def okhttp_version = "4.9.3"
+    def okhttp_version = "4.10.0"
     implementation "com.squareup.okhttp3:okhttp:$okhttp_version"
     implementation "com.squareup.okhttp3:logging-interceptor:$okhttp_version"
 
