@@ -81,10 +81,7 @@ fun IncomingMessage.isReplyError(reason: String? = null): Boolean =
             && reply?.get("status") == "error"
             && (reason == null || getResponse()?.get("reason") == reason)
 
-fun Flow<IncomingMessage>.isForbidden() = this.filter { it == Forbidden }
-fun Flow<IncomingMessage>.isSocketClose() = this.filter { it == SocketClose }
-
-suspend fun Flow<IncomingMessage>.filterRef(ref: String): IncomingMessage = this.first { it.ref == ref }
+fun IncomingMessage.isUnmatchedTopic() = this.isReplyError("unmatched topic")
 
 fun IncomingMessage.toResult(): Result<IncomingMessage> =
     if (this.isReplyError()) {

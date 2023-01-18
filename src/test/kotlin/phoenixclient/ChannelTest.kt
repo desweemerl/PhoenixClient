@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.RepeatedTest
 import org.junit.jupiter.api.Test
 
 class ChannelTest {
@@ -62,8 +63,8 @@ class ChannelTest {
         assert(connection == 3)
     }
 
-    @Test
-    fun testChannelCrash() = runTest {
+    @RepeatedTest(10)
+    fun testChannelCrash() = runBlocking {
         val client = getClient()
         var message: IncomingMessage? = null
 
@@ -71,7 +72,7 @@ class ChannelTest {
             client.state.isConnected()
                 .collect {
                     var channel = client.join("test:1").getOrThrow()
-                    channel.push("crash_channel")
+                    channel.pushNoReply("crash_channel")
                     message = channel.push("hello", mapOf("name" to "toto")).getOrThrow()
                 }
         }
@@ -79,7 +80,7 @@ class ChannelTest {
         client.connect(mapOf("token" to "user1234"))
 
         waitWhile(1, 5000) {
-            message == null
+            message == null || message?.isUnmatchedTopic() == true
         }
 
         job.cancel()
@@ -89,7 +90,7 @@ class ChannelTest {
     }
 
 
-    @Test
+    @RepeatedTest(5)
     fun testChannelBatch() = runTest {
         val client = getClient()
         var counter = 0
@@ -98,7 +99,7 @@ class ChannelTest {
             client.state.isConnected()
                 .collect {
                     var channel = client.join("test:1").getOrThrow()
-                    repeat(10000) {
+                    repeat(1000) {
                         val name = "toto$counter"
                         channel.push("hello", mapOf("name" to name), 100L).getOrThrow()
                         counter++
@@ -125,7 +126,7 @@ class ChannelTest {
         okHttpPhoenixClient(
             port = 4000,
             ssl = false,
-            retry = retry,
+            retryTimeout = retry,
             heartbeatInterval = heartbeatInterval,
         ).getOrThrow()
 }

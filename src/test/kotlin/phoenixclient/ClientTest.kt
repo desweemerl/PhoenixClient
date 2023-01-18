@@ -11,23 +11,19 @@ class ClientTest {
 
     @Test
     fun testUnauthorizedConnection() = runTest {
-        val client = getClient()
         var forbidden = false
-
-        val job = launch {
-            forbidden = client.messages
-                .isForbidden()
-                .map { true }
-                .first()
-        }
+        val client = getClient(messageCallback = {
+            if (it == Forbidden) {
+                forbidden = true
+            }
+        })
 
         client.connect(mapOf("token" to "wrongToken"))
 
         waitWhile(1, 5000) {
-            job.isActive
+           !forbidden
         }
 
-        job.cancel()
         client.disconnect()
 
         assert(forbidden)
@@ -55,9 +51,10 @@ class ClientTest {
         assert(isConnected)
     }
 
-    private fun getClient(): Client =
+    private fun getClient(messageCallback: MessageCallback = {}): Client =
         okHttpPhoenixClient(
             port = 4000,
             ssl = false,
+            messageCallback = messageCallback,
         ).getOrThrow()
 }

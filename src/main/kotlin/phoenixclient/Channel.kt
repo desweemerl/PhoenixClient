@@ -15,7 +15,6 @@ interface Channel {
     val topic: String
 
     val state: StateFlow<ChannelState>
-    val message: Flow<IncomingMessage>
 
     suspend fun pushNoReply(event: String, payload: Map<String, Any?> = mapOf()): Result<Unit>
     suspend fun pushNoReply(event: String, payload: Map<String, Any?>, timeout: Long): Result<Unit>
@@ -28,9 +27,14 @@ interface Channel {
 
 internal class ChannelImpl(
     override val topic: String,
-    override val message: Flow<IncomingMessage>,
 
-    private val sendToSocket: suspend (event: String, payload: Map<String, Any?>, timeout: DynamicTimeout, joinRef: String?)
+    private val sendToSocket: suspend (
+        event: String,
+        payload: Map<String, Any?>,
+        timeout: DynamicTimeout,
+        joinRef: String?,
+        noRepy: Boolean,
+    )
         -> Result<IncomingMessage?>,
     private val disposeFromSocket: suspend (topic: String) -> Unit,
     private val defaultTimeout: Long = DEFAULT_TIMEOUT,
@@ -52,20 +56,21 @@ internal class ChannelImpl(
         pushNoReply(event, payload, defaultTimeout)
 
     override suspend fun pushNoReply(event: String, payload: Map<String, Any?>, timeout: Long): Result<Unit> =
-        sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef).map { Unit }
+        sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef, true).map { Unit }
 
     override suspend fun push(event: String, payload: Map<String, Any?>) =
         push(event, payload, defaultTimeout)
 
     override suspend fun push(event: String, payload: Map<String, Any?>, timeout: Long)
             : Result<IncomingMessage> =
-        sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef).map { it!! }
+        sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef, false).map { it!! }
 
     override suspend fun leave() {
         disposeFromSocket(topic)
     }
 
     internal fun dirtyClose() {
+        logger.debug("Dirty closing channel with topic '$topic'")
         _state.update { ChannelState.CLOSE }
     }
 
@@ -112,7 +117,7 @@ internal class ChannelImpl(
 
                 joinPayload = payload
 
-                sendToSocket("phx_join", payload, timeout, joinRef).map { it!! }
+                sendToSocket("phx_join", payload, timeout, joinRef, false).map { it!! }
                     .onSuccess {
                         logger.debug("Channel with topic '$topic' was joined")
                         _state.update { ChannelState.JOINED }

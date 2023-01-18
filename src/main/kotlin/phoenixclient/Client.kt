@@ -14,9 +14,10 @@ enum class ConnectionState {
 
 fun Flow<ConnectionState>.isConnected() = this.filter { it == ConnectionState.CONNECTED }.map { true }
 
+typealias MessageCallback = (message: IncomingMessage) -> Unit
+
 interface Client {
-    val state: StateFlow<ConnectionState>
-    val messages: SharedFlow<IncomingMessage>
+    val state: Flow<ConnectionState>
 
     fun connect(params: Map<String, String>)
     suspend fun disconnect()
@@ -49,6 +50,7 @@ private class ClientImpl(
     val heartbeatTimeout: Long = DEFAULT_HEARTBEAT_TIMEOUT,
     private val defaultTimeout: Long = DEFAULT_TIMEOUT,
     private val webSocketEngine: WebSocketEngine = OkHttpEngine(),
+    private val messageCallback: MessageCallback = {},
     val serializer: (message: OutgoingMessage) -> String = {it.toJson()},
 ) : Client {
     private val logger = KotlinLogging.logger {}
@@ -58,10 +60,6 @@ private class ClientImpl(
     private var heatBeatJob: Job? = null
     private var connectJob: Job? = null
 
-    // Incoming and outgoing messages
-    private val incomingFlow = MutableSharedFlow<IncomingMessage>()
-    private val incomingBuffer = mutableMapOf<String, IncomingMessage>()
-
     // Manage message ref
     private val messageRef = refGenerator()
 
@@ -70,7 +68,9 @@ private class ClientImpl(
 
     private val _state = MutableStateFlow(ConnectionState.DISCONNECTED)
     override val state = _state.asStateFlow()
-    override val messages = incomingFlow.asSharedFlow()
+
+    // Store incoming messages by ref
+    private val messageBuffer = mutableMapOf<String, IncomingMessage>()
 
     init {
         if (heartbeatInterval < defaultTimeout) {
@@ -86,7 +86,7 @@ private class ClientImpl(
         payload: Map<String, Any?>,
         timeout: DynamicTimeout,
         joinRef: String? = null,
-        noReply: Boolean = false
+        noReply: Boolean = false,
     ) : Result<IncomingMessage?> {
         val channel = channels[topic]
 
@@ -101,29 +101,44 @@ private class ClientImpl(
             }
         }
 
+        val sendMessage = suspend {
+            val ref = messageRef().toString()
+            val outgoingMessage = OutgoingMessage(topic, event, payload, ref, joinRef)
+            webSocketEngine.send(serializer(outgoingMessage))
+
+            if (noReply) {
+                null
+            } else {
+                waitUntil(1) {
+                    messageBuffer.containsKey(ref)
+                }
+                messageBuffer.remove(ref)
+            }
+        }
+
         val sendTimer = timer(timeout) {
             if (channel != null && event != "phx_join" && channel.state.value != ChannelState.JOINED) {
                 logger.debug(
                     "Waiting for channel with topic '${channel.topic}' to join before sending "
                             + "message with event='$event' and payload='$payload'"
                 )
+
                 waitUntil(1) {
                     channel.state.value == ChannelState.JOINED
                 }
             }
 
-            val ref = messageRef().toString()
-            val message = OutgoingMessage(topic, event, payload, ref, joinRef)
-            webSocketEngine.send(serializer(message))
-
             if (noReply) {
-                null
+                sendMessage()
             } else {
-                waitUntil(1) {
-                    incomingBuffer.containsKey(ref)
+                var message = sendMessage()
+                if (channel != null && message?.isUnmatchedTopic() == true) {
+                    waitUntil(1) {
+                        channel.state.value == ChannelState.JOINED
+                    }
+                    message = sendMessage()
                 }
-
-                incomingBuffer.remove(ref)
+                message
             }
         }
 
@@ -149,35 +164,20 @@ private class ClientImpl(
         val channel = channels.getOrPut(topic) {
             var channelImpl: ChannelImpl? = null
 
-            val incomingChannelMessage = messages
-                .filter { it.topic == topic }
-
-            val errorChannelJob = scope.launch {
-                incomingChannelMessage
-                    .filter { it.isError() }
-                    .collect {
-                        logger.info("Trying to reconnect to channel with topic '$topic'")
-                        channelImpl?.let { ci ->
-                            ci.dirtyClose()
-                            ci.rejoin()
-                        }
-                    }
-            }
-
-            val sendToSocket: suspend (String, Map<String, Any?>, DynamicTimeout, String?) -> Result<IncomingMessage?> =
-                { event, payload, channelTimeout, joinRef ->
-                    send(topic, event, payload, channelTimeout, joinRef)
+            val sendToSocket: suspend (String, Map<String, Any?>, DynamicTimeout, String?, Boolean)
+                -> Result<IncomingMessage?> =
+                { event, payload, channelTimeout, joinRef, noReply ->
+                    send(topic, event, payload, channelTimeout, joinRef, noReply)
                 }
 
             val disposeFromSocket: suspend (topic: String) -> Unit = {
                 channels[topic]?.let {
                     it.close()
-                    errorChannelJob.cancel()
                     channels.remove(topic)
                 }
             }
 
-            channelImpl = ChannelImpl(topic, incomingChannelMessage, sendToSocket, disposeFromSocket)
+            channelImpl = ChannelImpl(topic, sendToSocket, disposeFromSocket)
 
             return@getOrPut channelImpl
         }
@@ -216,9 +216,9 @@ private class ClientImpl(
         }
     }
 
-    suspend fun launchWebSocket(params: Map<String, String>)  {
+    suspend fun launchWebSocket(params: Map<String, String>) = coroutineScope {
         if (_state.value != ConnectionState.DISCONNECTED) {
-            return
+            return@coroutineScope
         }
 
         logger.info("Launching webSocket")
@@ -232,26 +232,38 @@ private class ClientImpl(
                 params = params,
                 ssl = ssl,
                 untrustedCertificate = untrustedCertificate,
-            )
-                .takeWhile {
-                    active && _state.value != ConnectionState.DISCONNECTED
-                }
-                .collect { incomingMessage ->
-                    incomingMessage.message?.let {
-                        logger.debug("Receiving message from engine: ${incomingMessage.message}")
-                        incomingMessage.message.ref?.let { ref ->
-                            incomingBuffer[ref] = incomingMessage.message
+            ).takeWhile {
+                active && _state.value != ConnectionState.DISCONNECTED
+            }
+                .collect { event ->
+                    event.message?.let { incomingMessage ->
+                        logger.debug("Receiving message from engine: $incomingMessage")
+
+                        launch {
+                            messageCallback(incomingMessage)
                         }
 
-                        incomingFlow.emit(it)
+                        event.message?.let { message ->
+                            if (message.ref != null) {
+                                messageBuffer[message.ref] = message
+                            }
+                        }
 
                         // TODO: Check forbidden on both socket and channel
-                        if (it == Forbidden) {
+                        if (incomingMessage == Forbidden) {
                             active = false
+                        } else if (incomingMessage.isError() && incomingMessage.topic.isNotEmpty()) {
+                            channels[incomingMessage.topic]?.let {
+                                launch {
+                                    it.dirtyClose()
+                                    it.rejoin()
+                                }
+                            }
+
                         }
                     }
 
-                    incomingMessage.state?.let { newState ->
+                    event.state?.let { newState ->
                         logger.debug("Receiving new state '$newState' from webSocket engine")
                         _state.update { newState }
                     }
@@ -289,8 +301,11 @@ private class ClientImpl(
         // Retry after being disconnected
         scope.launch {
             val retryTimer = Timer(retry) {
+                if (!active) {
+                    throw BadActionException("WebSocket is not active")
+                }
                 // Let the webSocket set the connection up
-                if (connectJob?.isActive != true || state.value != ConnectionState.CONNECTING) {
+                if (state.value == ConnectionState.DISCONNECTED) {
                     connectJob?.cancel()
                     connectJob = scope.launch {
                         launchWebSocket(params)
@@ -333,8 +348,8 @@ private class ClientImpl(
         channels.clear()
 
         webSocketEngine.close()
+        messageBuffer.clear()
 
-        incomingBuffer.clear()
         scope.cancel()
     }
 }
@@ -345,15 +360,26 @@ fun okHttpPhoenixClient(
     path: String = DEFAULT_WS_PATH,
     ssl: Boolean = DEFAULT_WS_SSL,
     untrustedCertificate: Boolean = DEFAULT_UNTRUSTED_CERTIFICATE,
-    retry: DynamicTimeout = DEFAULT_RETRY,
+    retryTimeout: DynamicTimeout = DEFAULT_RETRY,
     heartbeatInterval: Long = DEFAULT_HEARTBEAT_INTERVAL,
     heartbeatTimeout: Long = DEFAULT_HEARTBEAT_TIMEOUT,
     defaultTimeout: Long = DEFAULT_TIMEOUT,
+    messageCallback: MessageCallback = {},
 ) : Result<Client> =
     try {
         Result.success(
             ClientImpl(
-                host, port, path, ssl, untrustedCertificate, retry, heartbeatInterval, heartbeatTimeout, defaultTimeout, OkHttpEngine()
+                host,
+                port,
+                path,
+                ssl,
+                untrustedCertificate,
+                retryTimeout,
+                heartbeatInterval,
+                heartbeatTimeout,
+                defaultTimeout,
+                OkHttpEngine(),
+                messageCallback,
             )
         )
     } catch (ex: Exception) {
