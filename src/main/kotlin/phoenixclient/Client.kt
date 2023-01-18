@@ -91,7 +91,7 @@ private class ClientImpl(
         timeout: DynamicTimeout,
         joinRef: String? = null,
         noReply: Boolean = false,
-        retries: Int = 3,
+        crashRetries: Int = 3,
     ): Result<IncomingMessage?> {
         val channel = channels[topic]
 
@@ -106,11 +106,11 @@ private class ClientImpl(
             }
         }
 
-        var sendTimer : Timer<IncomingMessage?>? = null
+        var sendTimer: Timer<IncomingMessage?>? = null
         var attempt = 0
         var finished = false
 
-        while (attempt < retries && !finished) {
+        while (attempt < crashRetries && !finished) {
             attempt++
 
             sendTimer = timer(timeout) {
@@ -144,13 +144,22 @@ private class ClientImpl(
 
                 waitUntil(1) {
                     messageBuffer.containsKey(ref)
+                            || (event != "phx_join" && channel?.state?.value != ChannelState.JOINED)
+                }
+
+                if (event != "phx_join" && channel?.state?.value != ChannelState.JOINED) {
+                    if (attempt < crashRetries) {
+                        return@timer null
+                    }
+
+                    throw ChannelException("Channel with topic ${topic} was closed")
                 }
 
                 val message = messageBuffer.remove(ref)!!
                 val reply = message.toReply().getOrNull()
 
                 if (reply?.isError() == true) {
-                    if (reply.isTopicClosed() && attempt < retries) {
+                    if (reply.isTopicClosed() && attempt < crashRetries) {
                         return@timer null
                     }
 
@@ -282,7 +291,7 @@ private class ClientImpl(
                         if (incomingMessage == Forbidden) {
                             _active = false
                         } else if (incomingMessage.isError()) {
-                            launch{
+                            launch {
                                 rejoinChannel(incomingMessage.topic)
                             }
                         } else if (incomingMessage.ref != null) {
@@ -317,7 +326,7 @@ private class ClientImpl(
                         event = "heartbeat",
                         payload = emptyPayload,
                         timeout = heartbeatTimeout.toDynamicTimeout(),
-                        retries = 1
+                        crashRetries = 1
                     ).isFailure
                 ) {
                     webSocketEngine.close()

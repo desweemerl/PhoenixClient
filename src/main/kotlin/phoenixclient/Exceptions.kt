@@ -6,4 +6,6 @@ class ResponseException(message: String, val source: IncomingMessage) : Exceptio
 
 class BadActionException(message: String) : Exception(message)
 
+class ChannelException(message: String) : Exception(message)
+
 class TimeoutException(message: String) : Exception(message)
