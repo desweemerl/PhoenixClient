@@ -79,11 +79,6 @@ class DefaultPhoenixClient(
     override suspend fun send(topic: String, event: String, payload: Map<String, Any?>, timeout: Long)
             : Result<IncomingMessage?> {
 
-        // Don't let ontgoingFlow grow with heartbeat messages.
-        if (topic == "phoenix" && event == "heartbeat" && state.value != ConnectionState.CONNECTED) {
-            return Result.failure(Exception("WebSocket is not connected"))
-        }
-
         val messageRef = ref.toString()
 
         outgoingFlow.emit(
