@@ -105,7 +105,6 @@ private class ClientImpl(
             }
         }
 
-
         val sendTimer = timer(timeout) {
             if (channel != null && channel.state.value != ChannelState.JOINED) {
                 if (event == "phx_join") {
@@ -139,8 +138,7 @@ private class ClientImpl(
 
                 val message = messageBuffer.remove(ref)!!
 
-                if (message.isError() == true || message.toReply().getOrNull()?.isError() == true) {
-                    rejoinChannel(topic)
+                if (message.toReply().getOrNull()?.isError() == true) {
                     throw ResponseException(
                         "Phoenix returned an error for message with ref '${ref}",
                         message
@@ -254,29 +252,30 @@ private class ClientImpl(
                 _active && _state.value != ConnectionState.DISCONNECTED
             }
                 .collect { event ->
-                    event.message?.let { incomingMessage ->
+                    val incomingMessage = event.message
+
+                    if (incomingMessage != null) {
                         logger.debug("Receiving message from engine: $incomingMessage")
 
-                        launch {
-                            val emitted = _messages.tryEmit(incomingMessage)
-                            if (!emitted) {
-                                logger.warn("Failed to emit message: $incomingMessage")
-                            }
-                        }
-
-                        event.message.let { message ->
-                            if (message.ref != null) {
-                                messageBuffer[message.ref] = message
-                            }
+                        if (!_messages.tryEmit(incomingMessage)) {
+                            logger.warn("Failed to emit message: $incomingMessage")
                         }
 
                         // TODO: Check forbidden on both socket and channel
                         if (incomingMessage == Forbidden) {
                             _active = false
+                        } else if (incomingMessage.isError()) {
+                            launch{
+                                rejoinChannel(incomingMessage.topic)
+                            }
+                        } else if (incomingMessage.ref != null) {
+                            messageBuffer[incomingMessage.ref] = incomingMessage
                         }
                     }
 
-                    event.state?.let { newState ->
+                    val newState = event.state
+
+                    if (newState != null) {
                         logger.debug("Receiving new state '$newState' from webSocket engine")
                         _state.update { newState }
                     }

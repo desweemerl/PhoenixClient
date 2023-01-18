@@ -1,6 +1,7 @@
 package phoenixclient
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.takeWhile
@@ -104,6 +105,41 @@ class ChannelTest {
         assert(exception is TimeoutException || exception is ResponseException)
     }
 
+    @RepeatedTest(10)
+    fun testChannelCrashRejoin() = runBlocking {
+        val client = getClient()
+        var countJoined = 0
+
+        val job = launch {
+            client.state.isConnected()
+                .collect {
+                    val channel = client.join("test:1").getOrThrow()
+
+                    launch {
+                        channel.state
+                            .filter { it == ChannelState.JOINED }
+                            .collect {
+                                countJoined++
+                            }
+                    }
+
+                    launch {
+                        channel.pushNoReply("crash_channel")
+                    }
+                }
+        }
+
+        client.connect(mapOf("token" to "user1234"))
+
+        waitWhile(1, 5000) {
+            countJoined < 2
+        }
+
+        job.cancel()
+        client.disconnect()
+
+        assert(countJoined == 2)
+    }
 
     @RepeatedTest(5)
     @ExperimentalCoroutinesApi

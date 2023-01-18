@@ -133,7 +133,7 @@ internal class ChannelImpl(
 
                 joinPayload = payload
 
-                sendToSocket("phx_join", payload, timeout, joinRef, false).map { it!! }
+                sendToSocket("phx_join", payload, timeout, null, false).map { it!! }
                     .onSuccess {
                         logger.debug("Channel with topic '$topic' was joined")
                         _state.update { ChannelState.JOINED }
