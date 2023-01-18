@@ -1,8 +1,5 @@
 package phoenixclient.engine
 
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.onFailure
 import kotlinx.coroutines.channels.trySendBlocking
@@ -17,9 +14,9 @@ import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 
-fun getHttpClient() : OkHttpClient = OkHttpClient.Builder().build()
+fun getHttpClient(): OkHttpClient = OkHttpClient.Builder().build()
 
-fun getUntrustedOkHttpClient() : OkHttpClient {
+fun getUntrustedOkHttpClient(): OkHttpClient {
     val x509UntrustManager = object : X509TrustManager {
         override fun checkClientTrusted(p0: Array<out X509Certificate>?, p1: String?) {
         }
@@ -97,19 +94,33 @@ class OkHttpEngine() : WebSocketEngine {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (response?.message?.lowercase() == "forbidden") {
-                    trySendBlocking(
-                        WebSocketEvent(
-                            state = ConnectionState.DISCONNECTED,
-                            message = Forbidden,
+                logger.error("Got a failure on webSocket: ${t.message}")
+
+                val message = when (response?.message?.lowercase()) {
+                    "forbidden" -> Forbidden
+                    "socket close" -> SocketClose
+                    else -> IncomingMessage(
+                        topic = "phoenix",
+                        event = "failure",
+                        reply = Reply(
+                            status = "error",
+                            response = mapOf<String, Any?>(
+                                "message" to response?.message,
+                                "exception" to t.message,
+                            )
                         )
                     )
-                        .onFailure {
-                            logger.error("Failed to send \"Forbidden\" event")
-                        }
                 }
-                logger.error("WebSocket failure: ${t.message}")
-                cancel(CancellationException("Websocket failure", t))
+
+                trySendBlocking(
+                    WebSocketEvent(
+                        state = ConnectionState.DISCONNECTED,
+                        message = message,
+                    )
+                )
+                    .onFailure {
+                        logger.error("Failed to send \"internal\" event")
+                    }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {

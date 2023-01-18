@@ -1,5 +1,7 @@
 package phoenixclient
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -8,11 +10,11 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Test
 
 
-class PhoenixClientImplTest {
+class DefaultPhoenixClientTest {
     @Test
     fun testUnauthorizedConnection() {
         runBlocking {
-            var client = getClient()
+            val client = getClient()
             var forbidden = false
 
             launch {
@@ -35,7 +37,7 @@ class PhoenixClientImplTest {
     @Test
     fun testAuthorizedConnection() {
         runBlocking {
-            var client = getClient()
+            val client = getClient()
             var connected = false
 
             launch {
@@ -55,12 +57,10 @@ class PhoenixClientImplTest {
         }
     }
 
-    fun getClient(): PhoenixClient {
-        val client = DefaultPhoenixClient(
+    private fun getClient(): PhoenixClient {
+        return DefaultPhoenixClient(
             port = 4000,
             ssl = false,
         )
-
-        return client
     }
 }

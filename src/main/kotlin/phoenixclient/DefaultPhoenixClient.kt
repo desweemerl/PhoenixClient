@@ -15,17 +15,26 @@ class DefaultPhoenixClient(
     val path: String = DEFAULT_WS_PATH,
     val ssl: Boolean = DEFAULT_WS_SSL,
     private val untrustedCertificate: Boolean = DEFAULT_UNTRUSTED_CERTIFICATE,
+    private val retry: Long = DEFAULT_RETRY,
     private val heartbeatInterval: Long = DEFAULT_HEARTBEAT_INTERVAL,
+    private val timeout: Long = DEFAULT_TIMEOUT,
     private val engine: WebSocketEngine = OkHttpEngine(),
 ) : PhoenixClient {
-    private var _activated = false
-    private val activated: Boolean
-    get() {
-         return _activated
+    init {
+        if (heartbeatInterval < timeout) {
+            throw Exception("heartbeatInterval must be greater or equal to timeout")
+        }
     }
 
+    private var _activated = false
+    private val activated: Boolean
+        get() {
+            return _activated
+        }
+
     private var wsJob: Job? = null
-    private var heartBeatJob: Job? = null
+    private var retryJob: Job? = null
+    private var reconnectJob: Job? = null
 
     // Logger
     private val logger = KotlinLogging.logger {}
@@ -58,23 +67,16 @@ class DefaultPhoenixClient(
         val result = send(
             topic = "phoenix",
             event = "heartbeat",
-            payload = mapOf(),
-            timeout = 1000,
+            payload = mapOf<String, Any?>(),
+            timeout = timeout,
         )
 
-        return result
-            .onFailure {
-                if (_activated) {
-                    logger.error("Heartbeat timed out, reconnecting")
-                    _state.update { ConnectionState.RECONNECTING }
-                }
-            }
-            .getOrNull() != null
+        return result.getOrNull() != null
     }
 
     fun serialize(message: OutgoingMessage): String = message.toJson()
 
-    override suspend fun send(topic: String, event: String, payload: Payload, timeout: Long)
+    override suspend fun send(topic: String, event: String, payload: Map<String, Any?>, timeout: Long)
             : Result<IncomingMessage?> {
 
         // Don't let ontgoingFlow grow with heartbeat messages.
@@ -110,42 +112,95 @@ class DefaultPhoenixClient(
     }
 
     private suspend fun launchWebSocket(params: Map<String, String>) = coroutineScope {
-        launch {
-            engine.connect(
-                host = host,
-                port = port,
-                path = path,
-                params = params,
-                ssl = ssl,
-                untrustedCertificate = untrustedCertificate,
-            )
-                .collect { incomingMessage ->
-                    incomingMessage.message?.let {
-                        _incomingFlow.emit(it)
+        wsJob = launch {
+            launch {
+                engine.connect(
+                    host = host,
+                    port = port,
+                    path = path,
+                    params = params,
+                    ssl = ssl,
+                    untrustedCertificate = untrustedCertificate,
+                )
+                    .collect { incomingMessage ->
+                        incomingMessage.message?.let {
+                            _incomingFlow.emit(it)
 
-                        if (it == Forbidden) {
-                            _activated = false
+                            if (it == Forbidden) {
+                                _activated = false
+                            }
+                        }
+
+                        incomingMessage.state?.let { newState ->
+                            if (
+                                (state.value == ConnectionState.RECONNECTING
+                                        && newState == ConnectionState.CONNECTED)
+                                || state.value != ConnectionState.RECONNECTING
+                            ) {
+                                _state.update { newState }
+                            }
                         }
                     }
-
-                    incomingMessage.state?.let { state -> _state.update { state } }
-                }
-
-        }
-
-        launch {
-            state
-                .filter { it == ConnectionState.CONNECTED }
-                .first()
-
-            logger.info("Connection is established, waiting for outgoing messages")
+            }
 
             launch {
-                outgoingFlow
-                    .takeWhile { state.value == ConnectionState.CONNECTED }
-                    .collect {
-                        engine.send(serialize(it))
+                state
+                    .filter { it == ConnectionState.CONNECTED }
+                    .first()
+
+                launch {
+                    logger.info("Connection is established, waiting for outgoing messages")
+
+                    outgoingFlow
+                        .takeWhile { state.value == ConnectionState.CONNECTED }
+                        .collect {
+                            engine.send(serialize(it))
+                        }
+                }
+
+                launch {
+                    logger.info("Setting up heartbeat")
+
+                    while (true) {
+                        delay(heartbeatInterval)
+
+                        if (state.value != ConnectionState.CONNECTED) {
+                            break
+                        }
+
+                        if (!heartbeat()) {
+                            engine.close()
+                            _state.update { ConnectionState.DISCONNECTED }
+                            wsJob?.cancel()
+                        }
                     }
+                }
+            }
+        }
+    }
+
+    private fun cancelWebSocket() {
+        engine.close()
+        wsJob?.cancel()
+    }
+
+    private suspend fun reconnect(params: Map<String, String>) = supervisorScope {
+        launch {
+            while (true) {
+                if (state.value == ConnectionState.CONNECTED) {
+                    break
+                }
+
+                logger.info("WebSocket disconnected, trying to reconnect")
+
+                _state.update { ConnectionState.RECONNECTING }
+
+                cancelWebSocket()
+                wsJob = launch {
+                    launchWebSocket(params)
+                }
+
+                delay(retry)
             }
         }
     }
@@ -158,22 +213,20 @@ class DefaultPhoenixClient(
         _activated = true
 
         coroutineScope {
-            heartBeatJob = launch {
-                while (activated) {
-                    // Process heartbeat
-                    delay(heartbeatInterval)
-                    if (!heartbeat()) {
-                        engine.close()
-                        wsJob?.cancel()
-                        wsJob = launch {
-                           launchWebSocket(params)
+            reconnectJob = launch {
+                state
+                    .takeWhile { activated }
+                    .debounce(retry)
+                    .filter {
+                        it != ConnectionState.RECONNECTING
+                                && it != ConnectionState.CONNECTED
+                                && retryJob?.isActive != true
+                    }
+                    .collect {
+                        retryJob = launch {
+                            reconnect(params)
                         }
-                   }
-
-                    engine.close()
-                    wsJob?.cancel()
-                    cancel()
-                }
+                    }
             }
 
             wsJob = launch {
@@ -185,9 +238,8 @@ class DefaultPhoenixClient(
     override suspend fun disconnect() {
         _activated = false
 
-        heartBeatJob?.cancel()
-        engine.close()
-        wsJob?.cancel()
+        reconnectJob?.cancel()
+        cancelWebSocket()
 
         _state.update { ConnectionState.DISCONNECTED }
     }

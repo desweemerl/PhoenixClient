@@ -3,12 +3,10 @@ package phoenixclient
 import com.google.gson.*
 import java.lang.reflect.Type
 
-typealias Payload = Map<String, Any>
-
-data class OutgoingMessage (
+data class OutgoingMessage(
     val topic: String,
     val event: String,
-    val payload: Payload = mapOf(),
+    val payload: Map<String, Any?> = mapOf(),
     val ref: String,
     val joinRef: String? = null,
 )

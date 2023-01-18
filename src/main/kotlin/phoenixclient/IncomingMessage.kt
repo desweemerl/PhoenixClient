@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.filter
 import java.lang.reflect.Type
 
 data class Reply(
-    val response: Payload,
+    val response: Map<String, Any?>,
     val status: String,
 )
 
@@ -41,7 +41,8 @@ object IncomingMessageDeserializer : JsonDeserializer<IncomingMessage> {
             throw Exception("values must have size of 5")
         }
 
-        val joinRef = if (values[0].isJsonNull) null else values[0].asString ?: throw Exception("join_ref must be a string")
+        val joinRef =
+            if (values[0].isJsonNull) null else values[0].asString ?: throw Exception("join_ref must be a string")
         val ref = values[1]?.asString ?: throw Exception("ref must be a string")
         val topic = values[2]?.asString ?: throw Exception("topic must be a string")
         val event = values[3]?.asString ?: throw Exception("event must be a string")
@@ -65,5 +66,7 @@ object IncomingMessageDeserializer : JsonDeserializer<IncomingMessage> {
 fun fromJson(input: String): IncomingMessage = JsonProcessor.fromJson(input, IncomingMessage::class.java)
 
 val Forbidden = IncomingMessage(topic = "phoenix", event = "forbidden")
+val SocketClose = IncomingMessage(topic = "phoenix", event = "socket_close")
 
 fun Flow<IncomingMessage>.isForbidden() = this.filter { it == Forbidden }
+fun Flow<IncomingMessage>.isSocketClose() = this.filter { it == SocketClose }
