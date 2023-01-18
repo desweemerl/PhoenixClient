@@ -3,7 +3,7 @@ package phoenixclient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import mu.KotlinLogging
-import phoenixclient.engine.OkHttpEngine
+import phoenixclient.engine.*
 
 
 enum class ConnectionState {
@@ -13,8 +13,6 @@ enum class ConnectionState {
 }
 
 fun Flow<ConnectionState>.isConnected() = this.filter { it == ConnectionState.CONNECTED }.map { true }
-
-typealias MessageCallback = (message: IncomingMessage) -> Unit
 
 interface Client {
     val state: Flow<ConnectionState>
@@ -52,7 +50,6 @@ private class ClientImpl(
     val heartbeatTimeout: Long = DEFAULT_HEARTBEAT_TIMEOUT,
     private val defaultTimeout: Long = DEFAULT_TIMEOUT,
     private val webSocketEngine: WebSocketEngine = OkHttpEngine(),
-    val serializer: (message: OutgoingMessage) -> String = { it.toJson() },
 ) : Client {
     private val logger = KotlinLogging.logger {}
     private var _active = false
@@ -131,7 +128,7 @@ private class ClientImpl(
 
             val ref = messageRef().toString()
             val outgoingMessage = OutgoingMessage(topic, event, payload, ref, joinRef)
-            webSocketEngine.send(serializer(outgoingMessage))
+            webSocketEngine.send(outgoingMessage)
 
             if (noReply) {
                 null
@@ -375,6 +372,8 @@ fun okHttpPhoenixClient(
     heartbeatInterval: Long = DEFAULT_HEARTBEAT_INTERVAL,
     heartbeatTimeout: Long = DEFAULT_HEARTBEAT_TIMEOUT,
     defaultTimeout: Long = DEFAULT_TIMEOUT,
+    serializer: (message: OutgoingMessage) -> String = { it.toJson() },
+    deserializer: (input: String) -> IncomingMessage = ::fromJson,
 ): Result<Client> =
     try {
         Result.success(
@@ -388,7 +387,10 @@ fun okHttpPhoenixClient(
                 heartbeatInterval,
                 heartbeatTimeout,
                 defaultTimeout,
-                OkHttpEngine(),
+                OkHttpEngine(
+                    serializer = serializer,
+                    deserializer = deserializer
+                ),
             )
         )
     } catch (ex: Exception) {

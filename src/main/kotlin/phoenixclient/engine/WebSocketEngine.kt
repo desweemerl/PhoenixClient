@@ -1,6 +1,9 @@
-package phoenixclient
+package phoenixclient.engine
 
 import kotlinx.coroutines.flow.Flow
+import phoenixclient.ConnectionState
+import phoenixclient.IncomingMessage
+import phoenixclient.OutgoingMessage
 
 const val DEFAULT_WS_HOST = "localhost"
 const val DEFAULT_WS_PORT = 443
@@ -23,7 +26,7 @@ interface WebSocketEngine {
         untrustedCertificate: Boolean = DEFAULT_UNTRUSTED_CERTIFICATE,
     ): Flow<WebSocketEvent>
 
-    fun send(value: String)
+    fun send(message: OutgoingMessage): Result<Unit>
     fun close()
 }
 

@@ -1,11 +1,15 @@
 package phoenixclient
 
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.RepeatedTest
 import org.junit.jupiter.api.Test
+
+class ReplyMessage(val message: String)
 
 class ChannelTest {
 
@@ -24,7 +28,7 @@ class ChannelTest {
         }
 
         val job2 = launch {
-            client.messages.collect{
+            client.messages.collect {
                 message2 = it
             }
         }
@@ -41,7 +45,7 @@ class ChannelTest {
         client.disconnect()
 
         listOf(message1, message2).forEach { message ->
-            assert(message?.getResponse()?.get("message") == "hello toto")
+            assert(message?.reply?.convertTo(ReplyMessage::class)?.getOrNull()?.message == "hello toto")
             assert(Regex("""^\d+$""").matches(message?.ref!!))
         }
     }
@@ -154,7 +158,7 @@ class ChannelTest {
                 }
                 .collect { channel ->
                     launch {
-                        channel.messages.collect{
+                        channel.messages.collect {
                             message = it
                         }
                     }
@@ -172,7 +176,7 @@ class ChannelTest {
         job.cancel()
         client.disconnect()
 
-        assert(message?.getResponse()?.get("message") == "hello toto")
+        assert(message?.reply?.convertTo(ReplyMessage::class)?.getOrNull()?.message == "hello toto")
     }
 
     private fun getClient(

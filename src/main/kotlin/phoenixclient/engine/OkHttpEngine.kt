@@ -48,7 +48,10 @@ fun getUntrustedOkHttpClient(): OkHttpClient {
         .build()
 }
 
-class OkHttpEngine() : WebSocketEngine {
+class OkHttpEngine(
+    val serializer: (OutgoingMessage) -> String = OutgoingMessage::toJson,
+    val deserializer: (String) -> IncomingMessage = ::fromJson,
+) : WebSocketEngine {
     // Logger
     private val logger = KotlinLogging.logger {}
     private var ws: WebSocket? = null
@@ -110,13 +113,10 @@ class OkHttpEngine() : WebSocketEngine {
                         else -> IncomingMessage(
                             topic = "phoenix",
                             event = "failure",
-                            reply = mapOf(
-                                "status" to "error",
-                                "response" to mapOf(
-                                    "message" to response?.message,
-                                    "exception" to t.message,
-                                )
-                            )
+                            reply = ReplyInternalError(
+                                throwable = t,
+                                message = response?.message,
+                            ),
                         )
                     }
 
@@ -133,7 +133,7 @@ class OkHttpEngine() : WebSocketEngine {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                trySendBlocking(WebSocketEvent(message = fromJson(text)))
+                trySendBlocking(WebSocketEvent(message = deserializer(text)))
                     .onFailure {
                         logger.error("Failed to receive message: ${it?.stackTraceToString()}")
                     }
@@ -156,10 +156,15 @@ class OkHttpEngine() : WebSocketEngine {
         }
     }
 
-    override fun send(value: String) {
-        logger.debug("Send message $value to web socket")
-        ws?.send(value)
-    }
+    override fun send(message: OutgoingMessage): Result<Unit> =
+        try {
+            logger.debug("Send message $message to web socket")
+            ws!!.send(serializer(message))
+            Result.success(Unit)
+        } catch (ex: Exception) {
+            logger.error("Send message $message to web socket: ${ex.stackTraceToString()}")
+            Result.failure(ex)
+        }
 
     override fun close() {
         logger.info("Closing webSocket")
