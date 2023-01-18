@@ -3,6 +3,7 @@ package phoenixclient
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.withTimeout
+import mu.KotlinLogging
 
 enum class ChannelState {
     JOINING,
@@ -17,12 +18,12 @@ interface Channel {
     val state: StateFlow<ChannelState>
     val message: Flow<IncomingMessage>
 
-    suspend fun pushNoWait(event: String, payload: Map<String, Any?>): Result<Unit>
+    suspend fun pushNoReply(event: String, payload: Map<String, Any?> = mapOf()): Result<Unit>
 
-    suspend fun push(event: String, payload: Map<String, Any?>): Result<IncomingMessage>
+    suspend fun push(event: String, payload: Map<String, Any?> = mapOf()): Result<IncomingMessage>
     suspend fun push(event: String, payload: Map<String, Any?>, timeout: Long): Result<IncomingMessage>
 
-    suspend fun dispose()
+    suspend fun leave()
 }
 
 internal class ChannelImpl(
@@ -37,7 +38,9 @@ internal class ChannelImpl(
         val payload: Map<String, Any?>,
     )
 
-    private var joinedOnce = false
+    private val logger = KotlinLogging.logger {}
+
+    private var joinPayload: Map<String, Any?>? = null
     private var pushBuffer = mutableListOf<PhoenixChannelMessage>()
 
     private val _state = MutableStateFlow(ChannelState.CLOSE)
@@ -52,16 +55,21 @@ internal class ChannelImpl(
         }
 
         pushBuffer.forEach {
-            pushNoWait(it.event, it.payload)
+            pushNoReply(it.event, it.payload)
         }
 
         pushBuffer.clear()
     }
 
-    override suspend fun pushNoWait(event: String, payload: Map<String, Any?>): Result<Unit> =
+    override suspend fun pushNoReply(event: String, payload: Map<String, Any?>): Result<Unit> =
 
-        if (!joinedOnce) {
-            Result.failure(BadActionException("Channel $topic was never joined. Join the channel before pushing message"))
+        if (joinRef == null) {
+            Result.failure(
+                BadActionException(
+                    "Channel with topic '$topic' was never joined. " +
+                            "Join the channel before pushing message"
+                )
+            )
         } else if (state.value == ChannelState.JOINED) {
             sendToSocket(event, payload, null, joinRef).map { Unit }
         } else {
@@ -79,8 +87,13 @@ internal class ChannelImpl(
             || (state.value == ChannelState.JOINING && event == "phx_join")
         ) {
             sendToSocket(event, payload, timeout, joinRef).map { it!! }
-        } else if (!joinedOnce) {
-            Result.failure(BadActionException("Channel $topic was never joined. Join the channel before pushing message"))
+        } else if (joinRef == null) {
+            Result.failure(
+                BadActionException(
+                    "Channel with topic '$topic' was never joined. " +
+                            "Join the channel before pushing message"
+                )
+            )
         } else {
             try {
                 withTimeout(timeout) {
@@ -94,8 +107,12 @@ internal class ChannelImpl(
             }
         }
 
-    override suspend fun dispose() {
+    override suspend fun leave() {
         disposeFromSocket(topic)
+    }
+
+    fun dirtyClose() {
+        _state.update { ChannelState.CLOSE }
     }
 
     suspend fun close(timeout: Long = defaultTimeout) {
@@ -115,27 +132,38 @@ internal class ChannelImpl(
             }
     }
 
+    suspend fun rejoin(timeout: Long = defaultTimeout): Result<Channel> =
+        if (joinRef == null) {
+            Result.failure(BadActionException("Channel with topic '$topic' was never joined"))
+        } else {
+            join(joinPayload ?: mapOf(), timeout)
+        }
+
     suspend fun join(
         payload: Map<String, Any?> = mapOf(),
         timeout: Long = defaultTimeout
     ): Result<Channel> =
         when (state.value) {
             ChannelState.LEAVING
-            -> Result.failure(BadActionException("Channel with topic $topic is leaving"))
+            -> Result.failure(BadActionException("Channel with topic '$topic' is leaving"))
 
             ChannelState.JOINING
-            -> Result.failure(BadActionException("Channel with topic $topic is already joining"))
+            -> Result.failure(BadActionException("Channel with topic '$topic' is already joining"))
 
             ChannelState.JOINED
-            -> Result.failure(BadActionException("Channel with topic $topic is already joined"))
+            -> Result.failure(BadActionException("Channel with topic '$topic' is already joined"))
 
             else -> {
+                println("Channel state: ${state.value}")
                 _state.update { ChannelState.JOINING }
+                joinPayload = payload
                 push("phx_join", payload, timeout)
                     .onSuccess {
-                        joinedOnce = true
                         _state.update { ChannelState.JOINED }
                         joinRef = it.ref
+                    }
+                    .onFailure {
+                        logger.error("Failed to join channel with '$topic': "  + it.stackTraceToString())
                     }
                     .map { this }
             }

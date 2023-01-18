@@ -75,6 +75,7 @@ fun IncomingMessage.isReplyOK(targetTopic: String? = null): Boolean =
             && reply?.get("status") == "ok"
             && (targetTopic == null || topic == targetTopic)
 
+fun IncomingMessage.isError(): Boolean = event == "phx_error"
 fun IncomingMessage.isReplyError(reason: String? = null): Boolean =
     event == "phx_reply"
             && reply?.get("status") == "error"
@@ -87,7 +88,7 @@ suspend fun Flow<IncomingMessage>.filterRef(ref: String): IncomingMessage = this
 
 fun IncomingMessage.toResult(): Result<IncomingMessage> =
     if (this.isReplyError()) {
-        Result.failure(ResponseException("Phoenix returned an error for message with ref ${this.ref}"))
+        Result.failure(ResponseException("Phoenix returned an error for message with ref '${this.ref}'"))
     } else {
         Result.success(this)
     }

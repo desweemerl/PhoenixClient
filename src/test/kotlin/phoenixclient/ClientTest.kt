@@ -17,6 +17,7 @@ class ClientTest {
                     .isForbidden()
                     .first()
                 client.disconnect()
+
                 assert(true)
             }
         }
@@ -28,9 +29,10 @@ class ClientTest {
             withTimeout(5000) {
                 val client = getClient()
                 client.connect(mapOf("token" to "user1234"))
-                val result = client.onConnected { true }
+                client.state.isConnected().first()
                 client.disconnect()
-                assert(result)
+
+                assert(true)
             }
         }
     }

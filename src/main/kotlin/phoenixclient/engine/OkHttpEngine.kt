@@ -80,9 +80,9 @@ class OkHttpEngine() : WebSocketEngine {
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                trySendBlocking(WebSocketEvent(state = ConnectionState.DISCONNECTING))
+                trySendBlocking(WebSocketEvent(state = ConnectionState.DISCONNECTED))
                     .onFailure {
-                        logger.error("Failed to send state DISCONNECTING")
+                        logger.error("Failed to send state DISCONNECTED")
                     }
             }
 
@@ -94,7 +94,7 @@ class OkHttpEngine() : WebSocketEngine {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                logger.error("Got a failure on webSocket: ${t.stackTraceToString()}")
+                logger.error("Got a failure on webSocket: " + t.stackTraceToString())
 
                 val message = when (response?.message?.lowercase()) {
                     "forbidden" -> Forbidden
@@ -119,14 +119,14 @@ class OkHttpEngine() : WebSocketEngine {
                     )
                 )
                     .onFailure {
-                        logger.error("Failed to send \"internal\" event")
+                        logger.error("Failed to send failure event: $message")
                     }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 trySendBlocking(WebSocketEvent(message = fromJson(text)))
                     .onFailure {
-                        logger.error("Failed to send message $text")
+                        logger.error("Failed to send message: $text")
                     }
             }
         }
@@ -134,7 +134,7 @@ class OkHttpEngine() : WebSocketEngine {
         try {
             ws = client.newWebSocket(request, listener)
         } catch (ex: Exception) {
-            logger.error("Failed to setup webSocket: $ex")
+            logger.error("Failed to setup webSocket: " + ex.printStackTrace())
             throw ex
         }
 
@@ -147,10 +147,12 @@ class OkHttpEngine() : WebSocketEngine {
     }
 
     override fun send(value: String) {
+        logger.debug("Send message $value to web socket")
         ws?.send(value)
     }
 
     override fun close() {
+        logger.info("Closing webSocket")
         ws?.close(1001, "Closing webSocket")
     }
 }
