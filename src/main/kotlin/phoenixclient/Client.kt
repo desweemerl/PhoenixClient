@@ -73,7 +73,7 @@ private class ClientImpl(
     private val outgoingFlow = MutableSharedFlow<OutgoingMessage>()
 
     // Manage message ref
-    private val messageRef = refGenerator().toString()
+    private val messageRef = refGenerator()
 
     // Channels storage
     private val channels: MutableMap<String, ChannelImpl> = mutableMapOf()
@@ -97,9 +97,9 @@ private class ClientImpl(
         joinRef: String? = null,
     ) : Result<IncomingMessage?> {
 
-        val messageRef = refGenerator().toString()
+        val ref = messageRef().toString()
 
-        val message = OutgoingMessage(topic, event, payload, messageRef, joinRef)
+        val message = OutgoingMessage(topic, event, payload, ref, joinRef)
         logger.debug("Emitting message to webSocket: $message")
         outgoingFlow.emit(message)
 
@@ -110,10 +110,10 @@ private class ClientImpl(
         return try {
             if (timeout > 0) {
                 withTimeout(timeout) {
-                    incomingFlow.filterRef(messageRef).toResult()
+                    incomingFlow.filterRef(ref).toResult()
                 }
             } else {
-                incomingFlow.filterRef(messageRef).toResult()
+                incomingFlow.filterRef(ref).toResult()
             }
         } catch (ex: TimeoutCancellationException) {
             Result.failure(
