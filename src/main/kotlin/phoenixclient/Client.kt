@@ -100,15 +100,15 @@ private class ClientImpl(
         event: String,
         payload: Any,
         timeout: DynamicTimeout,
-        joinRef: String? = null,
         noReply: Boolean = false,
     ): Result<IncomingMessage?> {
         val channel = channels[topic]
+        val isJoinEvent = event == "phx_join"
 
         // No need to join a channel with the topic "phoenix" (heartbeat).
         if (
             (topic != "phoenix" && channel == null)
-            || (channel?.isJoinedOnce == false && event != "phx_join")
+            || (channel?.isJoinedOnce == false && !isJoinEvent)
         ) {
             return Result.failure(
                 BadActionException(
@@ -119,8 +119,6 @@ private class ClientImpl(
         }
 
         var result: Result<IncomingMessage?>? = null
-
-
         var attempt = 0
 
         while (true) {
@@ -132,7 +130,7 @@ private class ClientImpl(
             try {
                 withTimeout(currentTimeout) {
                     if (channel != null && channel.state.value != ChannelState.JOINED) {
-                        if (event == "phx_join") {
+                        if (isJoinEvent) {
                             if (state.value.connectionState != ConnectionState.CONNECTED) {
                                 result = Result.failure(
                                     BadActionException("failed to join channel with topic '${channel.topic}' because WebSocket is not connected")
@@ -149,6 +147,7 @@ private class ClientImpl(
                         }
                     }
 
+                    val joinRef = if (isJoinEvent) null else channel?.joinRef
                     val outgoingMessage = OutgoingMessage(topic, event, payload, ref, joinRef)
 
                     if (noReply) {
@@ -159,7 +158,7 @@ private class ClientImpl(
 
                     val flows = arrayOf(
                         refMessages.filter { it.ref == ref }.map { Result.success(it) },
-                        if (topic != "phoenix" && event != "phx_join" && channel != null) {
+                        if (topic != "phoenix" && !isJoinEvent && channel != null) {
                             channel.state.filter { it != ChannelState.JOINED }.map {
                                 Result.failure(ChannelException("Channel with topic '$topic' was closed"))
                             }
@@ -216,10 +215,10 @@ private class ClientImpl(
 
     override suspend fun join(topic: String, payload: Any, timeout: DynamicTimeout): Result<Channel> {
         val channel = channels.getOrPut(topic) {
-            val sendToSocket: suspend (String, Any, DynamicTimeout, String?, Boolean)
+            val sendToSocket: suspend (String, Any, DynamicTimeout, Boolean)
             -> Result<IncomingMessage?> =
-                { event, payload, channelTimeout, joinRef, noReply ->
-                    send(topic, event, payload, channelTimeout, joinRef, noReply)
+                { event, payload, channelTimeout, noReply ->
+                    send(topic, event, payload, channelTimeout, noReply)
                 }
 
             val disposeFromSocket: suspend (topic: String) -> Unit = {

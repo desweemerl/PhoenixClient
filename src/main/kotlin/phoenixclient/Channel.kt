@@ -16,6 +16,7 @@ interface Channel {
 
     val state: Flow<ChannelState>
     val messages: Flow<IncomingMessage>
+    val joinRef: String?
 
     suspend fun pushNoReply(event: String, payload: Any = emptyPayload): Result<Unit>
     suspend fun pushNoReply(event: String, payload: Any, timeout: Long): Result<Unit>
@@ -34,7 +35,6 @@ internal class ChannelImpl(
         event: String,
         payload: Any,
         timeout: DynamicTimeout,
-        joinRef: String?,
         noRepy: Boolean,
     )
     -> Result<IncomingMessage?>,
@@ -47,13 +47,14 @@ internal class ChannelImpl(
     override val state = _state.asStateFlow()
 
     private var joinPayload: Any? = null
-    private var joinRef: String? = null
+    private var _joinRef: String? = null
+    override val joinRef: String?
+        get() = _joinRef
 
     internal val isJoinedOnce: Boolean
         get() {
-            return joinRef != null
+            return _joinRef != null
         }
-
 
     private fun <T> nonJoinedFailure(): Result<T> =
         Result.failure(BadActionException("Pushing message on non-joined channel is not allowed"))
@@ -63,7 +64,7 @@ internal class ChannelImpl(
 
     override suspend fun pushNoReply(event: String, payload: Any, timeout: Long): Result<Unit> =
         if (isJoinedOnce) {
-            sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef, true).map { }
+            sendToSocket(event, payload, timeout.toDynamicTimeout(), true).map { }
         } else {
             nonJoinedFailure()
         }
@@ -74,7 +75,7 @@ internal class ChannelImpl(
     override suspend fun push(event: String, payload: Any, timeout: Long)
             : Result<Reply> =
         if (isJoinedOnce) {
-            sendToSocket(event, payload, timeout.toDynamicTimeout(), joinRef, false).fold(
+            sendToSocket(event, payload, timeout.toDynamicTimeout(), false).fold(
                 { it!!.toReply() }, { Result.failure(it) }
             )
         } else {
@@ -98,7 +99,7 @@ internal class ChannelImpl(
         }
 
         _state.update { ChannelState.LEAVING }
-        joinRef = null
+        _joinRef = null
 
         push("phx_leave", emptyPayload, timeout)
             .getOrNull()?.let {
@@ -108,7 +109,7 @@ internal class ChannelImpl(
     }
 
     internal suspend fun rejoin(timeout: DynamicTimeout = DEFAULT_REJOIN_TIMEOUT): Result<Channel> =
-        if (joinRef == null) {
+        if (_joinRef == null) {
             Result.failure(BadActionException("Channel with topic '$topic' was never joined"))
         } else {
             join(joinPayload ?: emptyPayload, timeout)
@@ -133,11 +134,11 @@ internal class ChannelImpl(
 
                 joinPayload = payload
 
-                sendToSocket("phx_join", payload, timeout, null, false).map { it!! }
+                sendToSocket("phx_join", payload, timeout, false).map { it!! }
                     .onSuccess {
                         logger.debug("Channel with topic '$topic' was joined")
                         _state.update { ChannelState.JOINED }
-                        joinRef = it.ref
+                        _joinRef = it.ref
                     }
                     .onFailure {
                         logger.error("Failed to join channel with '$topic': " + it.stackTraceToString())

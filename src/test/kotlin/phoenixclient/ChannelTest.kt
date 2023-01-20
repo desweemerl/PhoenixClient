@@ -107,19 +107,42 @@ class ChannelTest {
     @ExperimentalCoroutinesApi
     fun testChannelWrongChannel() = runTest {
         withContext(Dispatchers.Default) {
+            var joinRef2: String? = null
+            var resultRef: String? = null
+
             withTimeout(5000) {
                 val client = getClient()
 
-                val job = launch {
+                val job1 = launch {
                     client.state.waitConnected()
                     val channel = client.join("test:1").getOrThrow()
+                    val joinRef1 = channel.joinRef
 
                     assert(channel.push("wrong_request").exceptionOrNull() is ChannelException)
+
                     assert(channel.push("hello", TestPayload(name = "toto"), 100L).isSuccess)
+                    joinRef2 = channel.joinRef
+                    assert(joinRef1 != null && joinRef2 != null && joinRef1 != joinRef2)
+                }
+
+                val job2 = launch {
+                    data class Response(val message: String)
+
+                    resultRef = client.messages
+                        .filter { message ->
+                            val payload = message.payload?.convertTo(Response::class, "response")?.getOrNull()
+                            payload?.message == "hello toto"
+                        }
+                        .map { it.joinRef }
+                        .first()
                 }
 
                 client.connect(mapOf("token" to "user1234"))
-                job.join()
+                job1.join()
+                job2.join()
+
+                assert(joinRef2 == resultRef)
+
                 client.disconnect()
             }
         }
