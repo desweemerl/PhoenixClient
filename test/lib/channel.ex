@@ -8,6 +8,14 @@ defmodule PhoenixClientTestWeb.Channel do
     {:noreply, socket}
   end
 
+  def handle_in("get_headers", _payload, socket) do
+    headers = %{
+      header1: Map.get(socket.assigns, :header1),
+      header2: Map.get(socket.assigns, :header2),
+    }
+    {:reply, {:ok, headers}, socket}
+  end
+
   def handle_in("crash_channel", _payload, socket) do
     raise "crash channel"
     {:noreply, socket}

@@ -94,6 +94,34 @@ class ClientTest {
         }
     }
 
+    @Test
+    @ExperimentalCoroutinesApi
+    fun testHeadersConnection() = runTest {
+        withContext(Dispatchers.Default) {
+            withTimeout(5000) {
+                val client = getClient()
+                var reply: Reply? = null
+
+                val job = launch {
+                    client.state.waitConnected()
+                    val channel = client.join("test:1").getOrThrow()
+                    reply = channel.push("get_headers").getOrThrow()
+                }
+
+                client.connect(
+                    params = mapOf("token" to "user1234"),
+                    headers = mapOf("X-Header1" to "value1", "X-Header2" to "value2"),
+                )
+                job.join()
+                client.disconnect()
+
+                val values = reply?.convertTo(Map::class)?.getOrThrow()
+                assert(values?.get("header1") == "value1")
+                assert(values?.get("header2") == "value2")
+            }
+        }
+    }
+
     private fun getClient(
         heartbeatInterval: Long = DEFAULT_HEARTBEAT_INTERVAL,
         heartbeatTimeout: Long = DEFAULT_HEARTBEAT_TIMEOUT,

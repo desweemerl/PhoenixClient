@@ -32,7 +32,7 @@ interface Client {
     val messages: Flow<IncomingMessage>
     val active: Boolean
 
-    fun connect(params: Map<String, String>)
+    fun connect(params: Map<String, String> = mapOf(), headers: Map<String, String> = mapOf())
     suspend fun disconnect()
 
     suspend fun join(topic: String, payload: Any = emptyPayload): Result<Channel>
@@ -262,7 +262,7 @@ private class ClientImpl(
         }
     }
 
-    private suspend fun launchWebSocket(params: Map<String, String>) = coroutineScope {
+    private suspend fun launchWebSocket(params: Map<String, String>, headers: Map<String, String>) = coroutineScope {
         if (state.value.connectionState != ConnectionState.DISCONNECTED) {
             return@coroutineScope
         }
@@ -275,6 +275,7 @@ private class ClientImpl(
             port = port,
             path = path,
             params = params,
+            headers = headers,
             ssl = ssl,
             untrustedCertificate = untrustedCertificate,
         ) { event ->
@@ -332,7 +333,7 @@ private class ClientImpl(
         }
     }
 
-    private suspend fun monitorConnection(params: Map<String, String>) {
+    private suspend fun monitorConnection(params: Map<String, String>, headers: Map<String, String>) {
         dynamicTimer(retry) {
             if (!state.value.active) {
                 throw BadActionException("WebSocket is not active")
@@ -342,7 +343,7 @@ private class ClientImpl(
             if (state.value.connectionState == ConnectionState.DISCONNECTED) {
                 webSocketJob?.cancelAndJoin()
                 webSocketJob = scope.launch {
-                    launchWebSocket(params)
+                    launchWebSocket(params = params, headers = headers)
                 }
             }
 
@@ -350,7 +351,7 @@ private class ClientImpl(
         }
     }
 
-    override fun connect(params: Map<String, String>) {
+    override fun connect(params: Map<String, String>, headers: Map<String, String>) {
         logger.info("Connect client")
 
         if (state.value.active) {
@@ -362,7 +363,7 @@ private class ClientImpl(
         // Retry after being disconnected
         scope.launch {
             try {
-                monitorConnection(params)
+                monitorConnection(params = params, headers = headers)
             } catch (ex: Exception) {
                 logger.error("Failed to launch the WebSocket: ${ex.message}")
                 return@launch
@@ -392,7 +393,7 @@ private class ClientImpl(
                     } else if (it.connectionState == ConnectionState.DISCONNECTED) {
                         heartbeatJob?.cancelAndJoin()
                         dirtyCloseChannels()
-                        monitorConnection(params)
+                        monitorConnection(params = params, headers = headers)
                     }
                 } catch (ex: Exception) {
                     logger.error("ex: ${ex.message}")

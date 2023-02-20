@@ -21,6 +21,7 @@ interface WebSocketEngine {
         port: Int = DEFAULT_WS_PORT,
         path: String = DEFAULT_WS_PATH,
         params: Map<String, String> = mapOf(),
+        headers: Map<String, String> = mapOf(),
         ssl: Boolean = DEFAULT_WS_SSL,
         untrustedCertificate: Boolean = DEFAULT_UNTRUSTED_CERTIFICATE,
         receiver: (event: WebSocketEvent) -> Unit = {},

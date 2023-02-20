@@ -57,6 +57,7 @@ class OkHttpEngine(
         port: Int,
         path: String,
         params: Map<String, String>,
+        headers: Map<String, String>,
         ssl: Boolean,
         untrustedCertificate: Boolean,
         receiver: (event: WebSocketEvent) -> Unit,
@@ -70,7 +71,12 @@ class OkHttpEngine(
                 params.entries.joinToString("&") { e -> "${e.key}=${e.value}" }
 
         val url = "$scheme://$host:$port/$finalPath"
-        val request = Request.Builder().url(url).build()
+        val headersBuilder = headers
+            .toList()
+            .fold(Headers.Builder()) {
+                builder, pair -> builder.add(pair.first, pair.second)
+            }
+        val request = Request.Builder().headers(headersBuilder.build()).url(url).build()
 
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
