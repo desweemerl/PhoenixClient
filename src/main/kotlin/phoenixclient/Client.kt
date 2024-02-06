@@ -62,8 +62,9 @@ private class ClientImpl(
     val heartbeatInterval: Long = DEFAULT_HEARTBEAT_INTERVAL,
     val heartbeatTimeout: Long = DEFAULT_HEARTBEAT_TIMEOUT,
     private val defaultTimeout: Long = DEFAULT_TIMEOUT,
-    private val webSocketEngine: WebSocketEngine = OkHttpEngine(),
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default),
+    private val webSocketEngine: WebSocketEngine,
+    private val dispatcher: CoroutineDispatcher,
+    private val scope: CoroutineScope,
 ) : Client {
     private val logger = KotlinLogging.logger {}
 
@@ -282,7 +283,7 @@ private class ClientImpl(
             val incomingMessage = event.message
 
             if (incomingMessage != null) {
-                logger.debug("Receiving message from engine: $incomingMessage")
+                logger.debug("Receiving message from engine: {}", incomingMessage)
 
                 if (!_messages.tryEmit(incomingMessage)) {
                     logger.warn("Failed to emit message: $incomingMessage")
@@ -306,7 +307,7 @@ private class ClientImpl(
             val newState = event.state
 
             if (newState != null) {
-                logger.debug("Receiving new state '$newState' from WebSocket engine")
+                logger.debug("Receiving new state '{}' from WebSocket engine", newState)
                 _state.update { ClientState(active = it.active, connectionState = newState) }
             }
         }
@@ -343,7 +344,9 @@ private class ClientImpl(
             if (state.value.connectionState == ConnectionState.DISCONNECTED) {
                 webSocketJob?.cancelAndJoin()
                 webSocketJob = scope.launch {
-                    launchWebSocket(params = params, headers = headers)
+                    withContext(dispatcher) {
+                        launchWebSocket(params = params, headers = headers)
+                    }
                 }
             }
 
@@ -362,41 +365,47 @@ private class ClientImpl(
 
         // Retry after being disconnected
         scope.launch {
-            try {
-                monitorConnection(params = params, headers = headers)
-            } catch (ex: Exception) {
-                logger.error("Failed to launch the WebSocket: ${ex.message}")
-                return@launch
-            }
-
-            var heartbeatJob: Job? = null
-            var joinChannelsJob: Job? = null
-
-            state.collect {
-                logger.debug("Client state updated: active='${it.active}' connectionState='${it.connectionState}'")
+            withContext(dispatcher) {
                 try {
-                    if (!it.active) {
-                        webSocketJob?.cancelAndJoin()
-                        cancel()
-                    } else if (it.connectionState == ConnectionState.CONNECTED) {
-                        if (heartbeatJob?.isActive != true) {
-                            heartbeatJob = launch {
-                                launchHeartbeat()
-                            }
-                        }
-
-                        if (joinChannelsJob?.isActive != true) {
-                            joinChannelsJob = launch {
-                                rejoinChannels()
-                            }
-                        }
-                    } else if (it.connectionState == ConnectionState.DISCONNECTED) {
-                        heartbeatJob?.cancelAndJoin()
-                        dirtyCloseChannels()
-                        monitorConnection(params = params, headers = headers)
-                    }
+                    monitorConnection(params = params, headers = headers)
                 } catch (ex: Exception) {
-                    logger.error("ex: ${ex.message}")
+                    logger.error("Failed to launch the WebSocket: ${ex.message}")
+                    return@withContext
+                }
+
+                var heartbeatJob: Job? = null
+                var joinChannelsJob: Job? = null
+
+                state.collect {
+                    logger.debug(
+                        "Client state updated: active='{}' connectionState='{}'",
+                        it.active,
+                        it.connectionState
+                    )
+                    try {
+                        if (!it.active) {
+                            webSocketJob?.cancelAndJoin()
+                            cancel()
+                        } else if (it.connectionState == ConnectionState.CONNECTED) {
+                            if (heartbeatJob?.isActive != true) {
+                                heartbeatJob = launch {
+                                    launchHeartbeat()
+                                }
+                            }
+
+                            if (joinChannelsJob?.isActive != true) {
+                                joinChannelsJob = launch {
+                                    rejoinChannels()
+                                }
+                            }
+                        } else if (it.connectionState == ConnectionState.DISCONNECTED) {
+                            heartbeatJob?.cancelAndJoin()
+                            dirtyCloseChannels()
+                            monitorConnection(params = params, headers = headers)
+                        }
+                    } catch (ex: Exception) {
+                        logger.error("ex: ${ex.message}")
+                    }
                 }
             }
         }
@@ -426,7 +435,8 @@ fun okHttpPhoenixClient(
     defaultTimeout: Long = DEFAULT_TIMEOUT,
     serializer: (message: OutgoingMessage) -> String = { it.toJson() },
     deserializer: (input: String) -> IncomingMessage = ::fromJson,
-    scope: CoroutineScope = CoroutineScope(Dispatchers.Default),
+    dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ): Result<Client> =
     try {
         Result.success(
@@ -444,6 +454,7 @@ fun okHttpPhoenixClient(
                     serializer = serializer,
                     deserializer = deserializer
                 ),
+                dispatcher,
                 scope,
             )
         )
